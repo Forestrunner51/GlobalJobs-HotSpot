@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+# Downloaded source data (public but large; see README for links)
+data/raw/
+data/fixture/

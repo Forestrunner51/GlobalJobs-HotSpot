@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    Privacy guarantee enforced by policy: scripts, workers and fetches may only
+    reach this site's own origin, which is static hosting with no endpoint that
+    accepts uploads. Resume text cannot be sent anywhere else.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Career Hotspot Globe</title>
+  <meta name="description" content="See where US occupations are concentrated, by metro area. Upload a resume to find matching occupations. The resume is read only in your browser.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Career Hotspot Globe</h1>
+      <span class="vintage" id="vintage">BLS OEWS, May 2025 estimates: not live job postings</span>
+    </div>
+    <button type="button" id="about-btn" class="ghost">About the data</button>
+  </header>
+
+  <div id="banner" class="banner" role="status" hidden>
+    <span id="banner-text"></span>
+    <button type="button" id="banner-action" class="ghost" hidden></button>
+    <button type="button" id="banner-close" class="icon-btn" aria-label="Dismiss">×</button>
+  </div>
+
+  <div id="fatal" class="fatal" hidden></div>
+
+  <main class="layout">
+    <aside class="panel sidebar" aria-label="Choose occupations">
+      <section>
+        <h2>Occupations</h2>
+        <div class="search">
+          <label for="occ-search" class="sr-only">Search occupations</label>
+          <input id="occ-search" type="search" placeholder="Search, e.g. nurse, data scientist" autocomplete="off"
+                 role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="occ-results">
+          <ul id="occ-results" class="results" role="listbox" hidden></ul>
+        </div>
+        <div id="chips" class="chips" aria-live="polite"></div>
+      </section>
+
+      <section>
+        <h2>Or start from a resume</h2>
+        <label class="drop" id="drop">
+          <input id="resume-file" type="file" accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          <span class="drop-main">Choose a file or drop it here</span>
+          <span class="drop-sub">PDF, DOCX or TXT</span>
+        </label>
+        <p class="privacy"><strong>Your resume stays on this device.</strong> It is read in this browser tab and never uploaded. This site has no server to receive it, and its security policy blocks sending data to any other site.</p>
+        <div id="resume-status" class="status" role="status" aria-live="polite"></div>
+        <ol id="suggestions" class="suggestions" aria-label="Suggested occupations"></ol>
+      </section>
+
+      <section>
+        <h2>Rank metros by</h2>
+        <div class="segmented" role="radiogroup" aria-label="Ranking metric">
+          <label><input type="radio" name="metric" value="lq" checked><span>Concentration (LQ)</span></label>
+          <label><input type="radio" name="metric" value="employment"><span>Number of jobs</span></label>
+        </div>
+        <p class="hint" id="metric-hint"></p>
+        <label class="floor">Minimum jobs for LQ ranking
+          <input id="floor" type="number" min="0" step="10" value="50" inputmode="numeric">
+        </label>
+      </section>
+    </aside>
+
+    <section class="viz" aria-label="Metro hotspots">
+      <div class="viz-head">
+        <div class="tabs" role="tablist" aria-label="Map style">
+          <button type="button" role="tab" id="tab-globe" data-view="globe" aria-selected="false">3D globe</button>
+          <button type="button" role="tab" id="tab-map" data-view="map" aria-selected="false">2D map</button>
+        </div>
+        <p class="coverage"><span class="dot-us" aria-hidden="true"></span>Data covers US metro areas only</p>
+      </div>
+      <p id="no-webgl-note" class="muted small" hidden>3D is unavailable in this browser (WebGL is off or blocked). The 2D map and table below show the same data.</p>
+      <div class="viewport" id="viewport">
+        <div id="viewport-inner" class="viewport-inner"></div>
+        <div id="empty" class="empty">
+          <p><strong>Pick an occupation</strong> to see where it's concentrated, or upload a resume.</p>
+          <div id="examples" class="examples"></div>
+        </div>
+        <div id="legend" class="legend" hidden></div>
+        <div id="loading" class="loading" hidden>Loading…</div>
+      </div>
+      <div class="table-wrap">
+        <h2 id="table-title">Ranked metros</h2>
+        <div id="table"></div>
+      </div>
+    </section>
+
+    <aside id="detail" class="panel detail" aria-label="Metro details" hidden></aside>
+  </main>
+
+  <dialog id="about" aria-labelledby="about-title">
+    <div class="dialog-head">
+      <h2 id="about-title">About the data</h2>
+      <button type="button" id="about-close" class="icon-btn" aria-label="Close">×</button>
+    </div>
+    <h3>How current it is</h3>
+    <p id="about-vintage">Survey estimates from May 2025, published in 2026. Not live job-market data.</p>
+    <h3>Concentration is not opportunity</h3>
+    <p>The <strong>location quotient (LQ)</strong> compares a job's share of local employment with its share nationally. An LQ of 1.0 is average and 3.0 means three times as common as usual. A high LQ means the job is <em>unusually concentrated</em> in a place. It does not mean employers there are hiring, or that moving there is a good idea. Check job postings, cost of living and wages before deciding anything.</p>
+    <p>By default, metros with fewer than 50 jobs in an occupation are left out of LQ rankings, so a handful of jobs in a small place can't top the list. "Number of jobs" answers a different question: where the most people do this work.</p>
+    <h3>Missing is not zero</h3>
+    <p>BLS withholds estimates that are unreliable or could identify an employer. Those metros show as <strong>no data</strong>: a flat grey dot on the globe, a dashed ring on the map, and a separate list under the table. They never count as low values. Where BLS published jobs but not an LQ, we calculate one from its employment totals and mark it with †.</p>
+    <h3>Your resume</h3>
+    <p>Resume files are read with your browser's file API and processed by code served from this site. No network request carries resume text, and the page's Content Security Policy only allows connections to this site's own static files. Matching is keyword-based and often wrong. Treat the suggestions as a starting point.</p>
+    <h3>Coverage</h3>
+    <p>US metropolitan statistical areas only. Rural and nonmetro areas, and all countries outside the US, are not included yet.</p>
+    <h3>Sources</h3>
+    <ul id="about-sources"></ul>
+  </dialog>
+</body>
+</html>
