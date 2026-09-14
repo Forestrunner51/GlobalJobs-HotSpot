@@ -161,5 +161,10 @@ Rendering layer:
   loosened, and the privacy copy re-checked.
 - Non-US sources, job postings, accounts: out of scope for v1. The record schema is ready for
   non-US data.
-- Deployment: GitHub Pages serves only the repo root or `/docs`. Either publish `web/` with an
-  Actions workflow or move it to `docs/`.
+
+## Deployment
+
+`.github/workflows/pages.yml` publishes `web/` to GitHub Pages when a push changes `web/`, or when
+you run it by hand from the Actions tab. One-time setup: **Settings → Pages → Source: GitHub
+Actions**. Before the first deploy, build and commit `web/data/`. CI can't build it because BLS
+blocks automated downloads.
