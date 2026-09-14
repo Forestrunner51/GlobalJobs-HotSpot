@@ -336,6 +336,9 @@ def build(args) -> None:
     nat = clean_oews(load_oews(require(args.oews_national, "OEWS national file",
                                        "Download https://www.bls.gov/oes/special-requests/oesm25nat.zip")),
                      "national")
+    # Some codes appear as both a broad group and its single detailed occupation
+    # (e.g. 13-1020) with identical figures; the detailed row is the denominator we need.
+    nat = nat[nat["O_GROUP"].isin(["total", "detailed"])]
     if nat.duplicated("OCC_CODE").any():
         die("National file has duplicate OCC_CODE rows after filtering; cannot pick a denominator.")
     nat_emp = nat.set_index("OCC_CODE")["TOT_EMP"].to_dict()
@@ -412,8 +415,10 @@ def build(args) -> None:
     log(f"  fallback formula vs reported LQ: median ratio {calib} over {len(calibration):,} rows")
 
     write_outputs(records, detailed, onet, nat_emp, nat_total, args, calib)
+    group_counts = metro["O_GROUP"].value_counts().to_dict()
     verify(OUT if args.out is None else args.out, metro_raw_rows=raw_rows,
-           nat_total=nat_total, full_build=not args.occ)
+           nat_total=nat_total, full_build=not args.occ,
+           metro_totals={k: v for k, v in totals.items() if not pd.isna(v)}, group_counts=group_counts)
 
 
 def write_outputs(records, detailed, onet, nat_emp, nat_total, args, calib) -> None:
@@ -510,7 +515,8 @@ def load_records(out: Path) -> list[dict]:
 
 
 def verify(out: Path, metro_raw_rows: int | None = None, nat_total: float | None = None,
-           full_build: bool = True) -> None:
+           full_build: bool = True, metro_totals: dict | None = None,
+           group_counts: dict | None = None) -> None:
     log("\nVerification")
     meta = json.loads((out / "meta.json").read_text())
     records = load_records(out)
@@ -529,8 +535,18 @@ def verify(out: Path, metro_raw_rows: int | None = None, nat_total: float | None
     check(not bad, "No sentinel strings in numeric fields", f"{len(bad)} bad values {bad[:3]}")
 
     if metro_raw_rows:
-        check(len(records) < metro_raw_rows * 0.9, "Detailed filter shrank row count",
-              f"{metro_raw_rows:,} raw -> {len(records):,} records")
+        # How much the filter removes depends on which aggregate levels a release includes
+        # (May 2025 metro: total + major only), so test for double counting directly.
+        check(len(records) < metro_raw_rows, "Detailed filter removed aggregate rows",
+              f"{metro_raw_rows:,} raw -> {len(records):,} records; groups in source: {group_counts}")
+    if metro_totals and full_build:
+        emp_by_metro = defaultdict(float)
+        for r in records:
+            emp_by_metro[r["regionId"]] += r["employment"] or 0
+        over = {rid: round(s / metro_totals[rid], 3) for rid, s in emp_by_metro.items()
+                if rid in metro_totals and s > metro_totals[rid] * 1.02}
+        check(not over, "No double counting: detailed jobs per metro <= metro total",
+              f"{len(over)} metros over total {dict(list(over.items())[:3])}")
 
     geo_bad = [r["id"] for r in records if r["lat"] is None or r["lng"] is None
                or not (17 <= r["lat"] <= 72 and -180 <= r["lng"] <= -64)
@@ -553,7 +569,8 @@ def verify(out: Path, metro_raw_rows: int | None = None, nat_total: float | None
                 by_occ[r["occCode"]].append(r)
         for occ, rid, name in (("17-2171", "26420", "Petroleum engineers -> Houston"),
                                ("27-2011", "31080", "Actors -> Los Angeles"),
-                               ("11-1031", "47900", "Legislators -> Washington")):
+                               # Legislators (11-1031) are not published at metro level in OEWS.
+                               ("19-3094", "47900", "Political scientists -> Washington")):
             ranked = sorted(by_occ.get(occ, []), key=lambda r: -r["concentration"])
             ids = [r["regionId"] for r in ranked]
             pos = ids.index(rid) + 1 if rid in ids else None
@@ -562,7 +579,7 @@ def verify(out: Path, metro_raw_rows: int | None = None, nat_total: float | None
             by_emp = [r["regionId"] for r in sorted(by_occ.get(occ, []), key=lambda r: -(r["employment"] or 0))]
             emp_pos = by_emp.index(rid) + 1 if rid in by_emp else None
             check(pos is not None and (pos <= 10 or (emp_pos or 99) <= 3), f"Known cluster: {name}",
-                  f"LQ rank {pos}, employment rank {emp_pos}; LQ top: {top}", warn_only=(occ == "11-1031"))
+                  f"LQ rank {pos}, employment rank {emp_pos}; LQ top: {top}")
 
     # The direct test of the national denominator: apply the fallback formula to rows
     # where BLS did report an LQ. A systematic offset from 1.0 means the denominator is wrong.

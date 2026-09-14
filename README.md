@@ -131,8 +131,10 @@ Data layer: `build_data.py` checks these automatically on every build.
 - [x] No sentinel strings survive into numeric fields
 - [x] The detailed filter cuts the row count well below the raw count
 - [x] Every lat/lng is inside US bounds; probe centroids for NYC, LA, Miami and Seattle fall on land
-- [x] Known clusters: petroleum engineers in Houston, actors in LA, legislators in Washington
-      (the legislators check only warns)
+- [x] Known clusters: petroleum engineers in Houston (#1 by jobs), actors in LA, political scientists
+      in Washington. Legislators (11-1031) aren't published at metro level, so they can't be checked.
+- [x] No double counting: in each metro, detailed-occupation jobs add up to no more than that
+      metro's total
 - [x] The fallback LQ formula, applied to rows where BLS *did* report LQ, gives a median ratio
       between 0.9 and 1.1. This directly tests the national denominator.
 - [x] Summed metro employment is below the national total
