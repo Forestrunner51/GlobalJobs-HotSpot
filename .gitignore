@@ -5,3 +5,8 @@ __pycache__/
 # Downloaded source data (public but large; see README for links)
 data/raw/
 data/fixture/
+
+# Job application prep: personal data
+apply/profile.md
+apply/out/
+apply/tracker.csv

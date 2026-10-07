@@ -169,21 +169,34 @@ export async function createGlobe(container, { narrow, onMetroClick, tooltipHtml
     wake(IDLE_MS + 500, 'data');
   }
 
-  function nearest(lat, lng) {
-    const threshold = 0.6 + 2.2 * globe.pointOfView().altitude;
-    let best = null;
-    let bestD = Infinity;
-    for (const p of points) {
-      const d = angularDistance(lat, lng, p.lat, p.lng);
-      if (d < bestD) { bestD = d; best = p; }
-    }
-    return bestD <= threshold ? best : null;
+  // Pick in screen space against each bar's projected base-to-top segment. Mapping the
+  // click to a surface lat/lng misses tall bars, whose tops project far from their base.
+  function distToSegment(x, y, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2)) : 0;
+    return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
   }
 
   function pick(e) {
     const r = host.getBoundingClientRect();
-    const c = globe.toGlobeCoords(e.clientX - r.left, e.clientY - r.top);
-    return c ? nearest(c.lat, c.lng) : null;
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const pov = globe.pointOfView();
+    // Points beyond the horizon seen from the camera are hidden behind the globe.
+    const horizon = (Math.acos(1 / (1 + pov.altitude)) * 180) / Math.PI;
+    const tolerance = e.pointerType === 'touch' ? 22 : 12;
+    let best = null;
+    let bestD = Infinity;
+    for (const p of points) {
+      if (angularDistance(pov.lat, pov.lng, p.lat, p.lng) > horizon) continue;
+      const d = distToSegment(x, y, globe.getScreenCoords(p.lat, p.lng, 0), globe.getScreenCoords(p.lat, p.lng, p.alt));
+      // Prefer value markers over flat no-data dots when both are within reach.
+      const score = p.noData ? d + 4 : d;
+      if (score < bestD) { bestD = score; best = p; }
+    }
+    return bestD <= tolerance ? best : null;
   }
 
   const tip = document.createElement('div');
@@ -255,6 +268,7 @@ export async function createGlobe(container, { narrow, onMetroClick, tooltipHtml
     markerIds: () => points.filter((p) => !p.noData).map((p) => p.metro.regionId),
     isPaused: () => paused,
     stats,
+    globe,
     renderer,
   };
 }
