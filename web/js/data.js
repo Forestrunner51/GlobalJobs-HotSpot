@@ -36,6 +36,21 @@ export async function loadCore() {
   };
 }
 
+// Job postings come from jobs/fetch_jobs.py. The full text is a separate, larger file,
+// fetched only when someone reads or copies a posting.
+let jobsPromise;
+let jobTextPromise;
+
+export function loadJobs() {
+  jobsPromise ??= getJSON('jobs.json').catch((err) => { jobsPromise = null; throw err; });
+  return jobsPromise;
+}
+
+export function loadJobText() {
+  jobTextPromise ??= getJSON('jobs-text.json').catch((err) => { jobTextPromise = null; throw err; });
+  return jobTextPromise;
+}
+
 function chunk(core, key, path) {
   if (!core.chunks.has(key)) {
     const p = getJSON(path).then(indexByOcc);

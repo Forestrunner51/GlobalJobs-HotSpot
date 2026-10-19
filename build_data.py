@@ -54,6 +54,32 @@ TOP_OCCS_PER_METRO = 15
 METRO_TOP_FLOOR = 50  # employment floor for the per-metro "most concentrated" list
 SHARD_THRESHOLD_BYTES = 3_000_000
 
+# Programming languages, matched against the full O*NET software list (before the TECH_PER_OCC
+# cut, which drops rarer ones like Rust). Each pattern must match the whole O*NET name.
+LANGUAGES = {
+    "Rust": r"Rust( programming language)?",
+    "Go": r"Go|Golang",
+    "Python": r"Python",
+    "Java": r"(Oracle |Sun Microsystems )?Java( 2 Platform Enterprise Edition J2EE| Enterprise Edition EE)?",
+    "JavaScript": r"JavaScript",
+    "TypeScript": r"TypeScript",
+    "C": r"C|American National Standards Institute ANSI C",
+    "C++": r"C\+\+",
+    "C#": r"C#|Microsoft Visual C# \.NET",
+    "Kotlin": r"Kotlin",
+    "Swift": r"Swift",
+    "Scala": r"Scala",
+    "Ruby": r"Ruby( on Rails)?",
+    "PHP": r"PHP|Hypertext preprocessor PHP",
+    "Perl": r"Perl",
+    "R": r"R",
+    "Haskell": r"Haskell",
+    "MATLAB": r"The MathWorks MATLAB",
+    "Visual Basic": r"Microsoft Visual Basic",
+    "COBOL": r"Common business oriented language COBOL",
+}
+LANGUAGE_RES = {lang: re.compile(pat) for lang, pat in LANGUAGES.items()}
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)
@@ -296,10 +322,12 @@ def load_onet(path: Path) -> dict[str, dict]:
     for code, d in occ.items():
         skills = sorted(d["skills"].items(), key=lambda kv: -sum(kv[1]) / len(kv[1]))
         tech = sorted(d["tech"].items(), key=lambda kv: (-kv[1], kv[0]))
+        languages = [lang for lang, rx in LANGUAGE_RES.items() if any(rx.fullmatch(t) for t in d["tech"])]
         titles = list(dict.fromkeys(d["onetTitles"] + list(d["titles"])))
         result[code] = {
             "skills": [k for k, _ in skills[:SKILLS_PER_OCC]],
             "tech": [k for k, _ in tech[:TECH_PER_OCC]],
+            "languages": languages,
             "titles": titles[:TITLES_PER_OCC],
         }
     log(f"  O*NET rolled up to {len(result):,} six-digit SOC codes")
@@ -438,6 +466,7 @@ def write_outputs(records, detailed, onet, nat_emp, nat_total, args, calib) -> N
             "nationalEmployment": rnd(nat_emp.get(code), 0),
             "skills": info.get("skills", []),
             "tech": info.get("tech", []),
+            "languages": info.get("languages", []),
             "titles": info.get("titles", []),
         })
     dump(out / "occupations.json", occupations)

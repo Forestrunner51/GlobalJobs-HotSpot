@@ -23,6 +23,9 @@ export ANTHROPIC_API_KEY=sk-ant-...            # from console.anthropic.com
 # from copied text
 pbpaste | .venv/bin/python apply/jobprep.py prep --to hiring@company.com
 
+# from the site's Job postings tab: press "Copy for prep" on a posting, then
+pbpaste | .venv/bin/python apply/jobprep.py prep
+
 # add context the posting doesn't have
 ... prep --file posting.txt --note "Referred by Sam on their platform team"
 ```

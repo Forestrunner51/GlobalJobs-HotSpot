@@ -3,7 +3,9 @@ name: Deploy site to GitHub Pages
 on:
   push:
     branches: [feature/globaltesting, main]
-    paths: ["web/**", ".github/workflows/pages.yml"]
+    paths: ["web/**", "jobs/**", ".github/workflows/pages.yml"]
+  schedule:
+    - cron: "0 12 * * *" # daily at 12:00 UTC, to refresh job postings (runs from the default branch)
   workflow_dispatch:
 
 permissions:
@@ -21,6 +23,19 @@ jobs:
     environment: github-pages
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Standard library only, so no install step. If every source fails, the script exits
+      # non-zero and leaves the committed jobs.json in place; the site still deploys.
+      - name: Fetch job postings
+        continue-on-error: true
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          USAJOBS_API_KEY: ${{ secrets.USAJOBS_API_KEY }}
+          USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
+        run: python jobs/fetch_jobs.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

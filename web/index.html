@@ -11,7 +11,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <title>Career Hotspot Globe</title>
-  <meta name="description" content="See where US occupations are concentrated, by metro area. Upload a resume to find matching occupations. The resume is read only in your browser.">
+  <meta name="description" content="See where US occupations are concentrated, by metro area, and browse live job postings by keyword. Upload a resume to find matching occupations. The resume is read only in your browser.">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="css/app.css">
   <script type="module" src="js/main.js"></script>
@@ -21,6 +21,10 @@
     <div class="brand">
       <h1>Career Hotspot Globe</h1>
       <span class="vintage" id="vintage">BLS OEWS, May 2025 estimates: not live job postings</span>
+    </div>
+    <div class="tabs mode-switch" role="tablist" aria-label="What to show">
+      <button type="button" role="tab" data-mode="occ" aria-selected="true">Where jobs cluster</button>
+      <button type="button" role="tab" data-mode="jobs" aria-selected="false">Job postings</button>
     </div>
     <button type="button" id="about-btn" class="ghost">About the data</button>
   </header>
@@ -34,14 +38,48 @@
   <div id="fatal" class="fatal" hidden></div>
 
   <main class="layout">
-    <aside class="panel sidebar" aria-label="Choose occupations">
+    <aside class="panel sidebar" aria-label="Filters">
+      <div id="jobs-side" hidden>
+        <section>
+          <h2>Job postings</h2>
+          <label for="job-q" class="sr-only">Filter postings</label>
+          <input id="job-q" class="text-input" type="search" placeholder="Filter by title, company or city" autocomplete="off">
+          <div class="segmented three" role="radiogroup" aria-label="Location">
+            <label><input type="radio" name="where" value="all" checked><span>Anywhere</span></label>
+            <label><input type="radio" name="where" value="us"><span>US</span></label>
+            <label><input type="radio" name="where" value="remote"><span>Remote</span></label>
+          </div>
+          <label class="check"><input type="checkbox" id="job-focus"> <span id="job-focus-label">Focused postings only</span></label>
+          <p class="hint">Focused means the keyword is in the title or mentioned at least twice, not just listed once among other languages.</p>
+          <p id="jobs-count" class="hint" aria-live="polite"></p>
+        </section>
+        <section>
+          <h2>Apply quickly</h2>
+          <ol class="steps">
+            <li>Press <strong>Copy for prep</strong> on a posting.</li>
+            <li>In Terminal, from the project folder:<br><code class="cmd">pbpaste | .venv/bin/python apply/jobprep.py prep</code><br>This writes a one-page memo PDF and an email tailored to that posting.</li>
+            <li>Press <strong>Apply</strong>, attach the memo, then run <code>apply/jobprep.py mark &lt;id&gt; sent</code> so follow-ups get tracked.</li>
+          </ol>
+        </section>
+        <section>
+          <h2>Sources</h2>
+          <ul id="jobs-sources" class="sources"></ul>
+          <p class="hint">Refresh with <code>python3 jobs/fetch_jobs.py</code>. Edit companies and keywords in <code>jobs/sources.json</code>.</p>
+        </section>
+      </div>
+      <div id="occ-side">
       <section>
         <h2>Occupations</h2>
         <div class="search">
           <label for="occ-search" class="sr-only">Search occupations</label>
-          <input id="occ-search" type="search" placeholder="Search, e.g. nurse, data scientist" autocomplete="off"
+          <input id="occ-search" type="search" placeholder="Search, e.g. nurse, data scientist, rust" autocomplete="off"
                  role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="occ-results">
           <ul id="occ-results" class="results" role="listbox" hidden></ul>
+        </div>
+        <div class="lang-pick">
+          <p class="hint">Jobs that use a language</p>
+          <div id="lang-picks" class="examples"></div>
+          <p id="lang-note" class="hint" hidden></p>
         </div>
         <div id="chips" class="chips" aria-live="polite"></div>
       </section>
@@ -69,6 +107,7 @@
           <input id="floor" type="number" min="0" step="10" value="50" inputmode="numeric">
         </label>
       </section>
+      </div>
     </aside>
 
     <section class="viz" aria-label="Metro hotspots">
@@ -77,7 +116,7 @@
           <button type="button" role="tab" id="tab-globe" data-view="globe" aria-selected="false">3D globe</button>
           <button type="button" role="tab" id="tab-map" data-view="map" aria-selected="false">2D map</button>
         </div>
-        <p class="coverage"><span class="dot-us" aria-hidden="true"></span>Data covers US metro areas only</p>
+        <p class="coverage"><span class="dot-us" aria-hidden="true"></span><span id="coverage-text">Data covers US metro areas only</span></p>
       </div>
       <p id="no-webgl-note" class="muted small" hidden>3D is unavailable in this browser (WebGL is off or blocked). The 2D map and table below show the same data.</p>
       <div class="viewport" id="viewport">
@@ -89,9 +128,16 @@
         <div id="legend" class="legend" hidden></div>
         <div id="loading" class="loading" hidden>Loading…</div>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap" id="table-wrap">
         <h2 id="table-title">Ranked metros</h2>
         <div id="table"></div>
+      </div>
+      <div class="table-wrap" id="jobs-wrap" hidden>
+        <div class="jobs-head">
+          <h2 id="jobs-title">Postings</h2>
+          <button type="button" id="jobs-clear-metro" class="ghost small" hidden>Show all locations</button>
+        </div>
+        <div id="jobs-list" class="jobs-list"></div>
       </div>
     </section>
 
@@ -114,6 +160,8 @@
     <p>Resume files are read with your browser's file API and processed by code served from this site. No network request carries resume text, and the page's Content Security Policy only allows connections to this site's own static files. Matching is keyword-based and often wrong. Treat the suggestions as a starting point.</p>
     <h3>Coverage</h3>
     <p>US metropolitan statistical areas only. Rural and nonmetro areas, and all countries outside the US, are not included yet.</p>
+    <h3>Job postings</h3>
+    <p>The postings tab lists live openings that mention your keywords (Rust by default). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. A posting can appear because it lists the keyword once among other languages; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Applying always happens on the employer's own site.</p>
     <h3>Sources</h3>
     <ul id="about-sources"></ul>
   </dialog>

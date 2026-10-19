@@ -1,12 +1,13 @@
 import { readState, writeState } from './state.js';
-import { loadCore, loadRecords } from './data.js';
+import { loadCore, loadRecords, loadJobs, loadJobText } from './data.js';
 import { aggregate, markerSubset, DEFAULT_FLOOR } from './aggregate.js';
 import { makeScale, RAMP } from './scale.js';
 import { renderTable } from './table.js';
 import { renderDetail } from './detail.js';
-import { buildSearchIndex, searchOccupations } from './search.js';
+import { buildSearchIndex, searchOccupations, languageCounts, occupationsByLanguage } from './search.js';
 import { hasWebGL } from './util.js';
 import { escapeHtml, fmtInt, fmtLQ } from './format.js';
+import { filterJobs, jobMarkers, isFocused, strengthLabel, postedLabel, safeUrl, postingForPrep } from './jobs.js';
 
 const $ = (sel) => document.querySelector(sel);
 const narrowMQ = window.matchMedia('(max-width: 760px)');
@@ -23,6 +24,11 @@ let webglOK = false;
 let lastAgg = EMPTY_AGG;
 let lastRecords = [];
 let refreshToken = 0;
+let jobsData = null;
+let jobsById = new Map();
+let jobsListed = [];
+const JOBS_PAGE = 50;
+let jobsShown = JOBS_PAGE;
 
 // Performance budget: cap markers, stricter on narrow viewports.
 const budget = () => (narrowMQ.matches
@@ -54,7 +60,17 @@ function showFatal(html) {
 // Views
 // ---------------------------------------------------------------------------
 
+function jobsTooltipHtml(m) {
+  const items = m.jobs.slice(0, 5).map((j) => `<li><span>${escapeHtml(j.title)}</span><span class="muted">${escapeHtml(j.company)}</span></li>`).join('');
+  const more = m.jobs.length > 5 ? `<li class="muted">+${m.jobs.length - 5} more</li>` : '';
+  return `<strong>${escapeHtml(m.regionLabel)}</strong>
+    <div class="tip-value">${fmtInt(m.value)} posting${m.value === 1 ? '' : 's'}</div>
+    <ul class="tip-parts">${items}${more}</ul>
+    <div class="tip-foot">Click to list them.</div>`;
+}
+
 function tooltipHtml(m) {
+  if (state.mode === 'jobs') return jobsTooltipHtml(m);
   const lqMetric = state.metric === 'lq';
   const parts = m.parts.slice(0, 8).map(({ rec, status }) => {
     const label = escapeHtml(core.occByCode.get(rec.occCode)?.label ?? rec.occLabel);
@@ -119,15 +135,27 @@ function onContextLost() {
   });
 }
 
+// Job postings are counts, so they use the same log scale as "Number of jobs".
+const viewMetric = () => (state.mode === 'jobs' ? 'employment' : state.metric);
+
 function pushToView() {
-  const scale = makeScale(state.metric, lastAgg.ranked.map((m) => m.value));
-  const markers = markerSubset(lastAgg.ranked, { metric: state.metric, ...budget() });
+  const scale = makeScale(viewMetric(), lastAgg.ranked.map((m) => m.value));
+  const markers = markerSubset(lastAgg.ranked, { metric: viewMetric(), ...budget() });
   view?.update({ markers, noData: lastAgg.noData, scale, selectedMetro: state.metro });
   renderLegend(scale, markers.length);
 }
 
 function renderLegend(scale, shown) {
   const el = $('#legend');
+  if (state.mode === 'jobs') {
+    el.hidden = !shown;
+    el.innerHTML = `
+      <div class="legend-title">Postings per metro <span class="muted">(${viewKind === 'globe' ? 'height' : 'size'} and color)</span></div>
+      <div class="legend-bar" style="background:linear-gradient(90deg,${RAMP.join(',')})"></div>
+      <div class="legend-scale"><span>${scale.format(scale.lo)}</span><span>${scale.format(scale.hi)}+</span></div>
+      <div class="legend-note">${shown} metro${shown === 1 ? '' : 's'}. Remote and non-US postings are in the list, not on the map.</div>`;
+    return;
+  }
   if (!state.occ.length) { el.hidden = true; return; }
   const lq = state.metric === 'lq';
   const total = lastAgg.ranked.length;
@@ -151,7 +179,10 @@ function renderLegend(scale, shown) {
 async function refresh({ push = false } = {}) {
   const token = ++refreshToken;
   writeState(state, { push });
+  applyMode();
+  if (state.mode === 'jobs') return refreshJobs(token);
   renderChips();
+  renderLanguages();
   syncControls();
   $('#empty').hidden = state.occ.length > 0;
 
@@ -177,6 +208,7 @@ async function refresh({ push = false } = {}) {
   pushToView();
   renderTableView();
   renderDetailView();
+  return undefined;
 }
 
 function renderTableView() {
@@ -202,9 +234,10 @@ function renderTableView() {
 
 function renderDetailView() {
   const el = $('#detail');
-  document.querySelector('.layout').classList.toggle('has-detail', !!state.metro);
+  const metro = state.mode === 'occ' ? state.metro : null; // in jobs mode a metro filters the list instead
+  document.querySelector('.layout').classList.toggle('has-detail', !!metro);
   renderDetail(el, {
-    metroInfo: state.metro ? core.metroById.get(state.metro) : null,
+    metroInfo: metro ? core.metroById.get(metro) : null,
     records: lastRecords.filter((r) => r.regionId === state.metro),
     selected: state.occ,
     occByCode: core.occByCode,
@@ -221,13 +254,223 @@ function renderDetailView() {
 
 function selectMetro(id) {
   state.metro = id;
-  writeState(state, { push: true });
   const info = id && core.metroById.get(id);
+  if (state.mode === 'jobs') {
+    if (info) view?.focus(info.lat, info.lng);
+    jobsShown = JOBS_PAGE;
+    refresh({ push: true });
+    if (id) $('#jobs-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  writeState(state, { push: true });
   if (info) view?.focus(info.lat, info.lng);
   pushToView();
   renderTableView();
   renderDetailView();
   if (info && narrowMQ.matches) $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ---------------------------------------------------------------------------
+// Job postings
+// ---------------------------------------------------------------------------
+
+let occVintage = '';
+
+function applyMode() {
+  const jobs = state.mode === 'jobs';
+  for (const tab of document.querySelectorAll('[data-mode]')) {
+    tab.setAttribute('aria-selected', String(tab.dataset.mode === state.mode));
+  }
+  $('#jobs-side').hidden = !jobs;
+  $('#occ-side').hidden = jobs;
+  $('#jobs-wrap').hidden = !jobs;
+  $('#table-wrap').hidden = jobs;
+  $('#vintage').textContent = jobs
+    ? (jobsData ? `Live postings, updated ${new Date(jobsData.generated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : 'Live job postings')
+    : occVintage;
+  $('#coverage-text').textContent = jobs
+    ? 'Map shows US postings with a city'
+    : 'Data covers US metro areas only';
+  if (jobs) $('#empty').hidden = true;
+}
+
+function setMode(mode) {
+  if (mode === state.mode) return;
+  state.mode = mode;
+  state.metro = null;
+  jobsShown = JOBS_PAGE;
+  view?.resetView();
+  refresh({ push: true });
+}
+
+async function refreshJobs(token) {
+  syncJobControls();
+  if (!jobsData) {
+    $('#loading').hidden = false;
+    try {
+      jobsData = await loadJobs();
+      jobsById = new Map(jobsData.jobs.map((j) => [j.id, j]));
+    } catch (err) {
+      if (token !== refreshToken) return;
+      console.error(err);
+      lastAgg = EMPTY_AGG;
+      pushToView();
+      $('#jobs-title').textContent = 'Postings';
+      $('#jobs-list').innerHTML = err.status === 404
+        ? '<p class="muted">No postings downloaded yet. Run <code>python3 jobs/fetch_jobs.py</code> from the project folder, then reload this page.</p>'
+        : `<p class="status error">Could not load postings (${escapeHtml(err.message)}).</p>`;
+      return;
+    } finally {
+      if (token === refreshToken) $('#loading').hidden = true;
+    }
+    if (token !== refreshToken) return;
+    applyMode();
+    syncJobControls();
+    renderJobSources();
+  }
+  const anywhere = filterJobs(jobsData.jobs, { q: state.q, where: state.where, focus: state.focus });
+  lastAgg = { ranked: jobMarkers(anywhere, core.metroById), noData: [], belowFloor: [] };
+  if (state.metro && !lastAgg.ranked.some((m) => m.regionId === state.metro)) state.metro = null;
+  jobsListed = state.metro ? anywhere.filter((j) => j.regionIds.includes(state.metro)) : anywhere;
+  pushToView();
+  renderJobs(anywhere);
+  renderDetailView();
+}
+
+function syncJobControls() {
+  const q = $('#job-q');
+  if (document.activeElement !== q) q.value = state.q;
+  for (const r of document.querySelectorAll('input[name="where"]')) r.checked = r.value === state.where;
+  $('#job-focus').checked = state.focus;
+  if (jobsData) $('#job-focus-label').textContent = `${jobsData.keywords.join(', ')}-focused postings only`;
+}
+
+function renderJobSources() {
+  const total = jobsData.jobs.length;
+  $('#jobs-sources').innerHTML = jobsData.sources.map((s) => {
+    const skipped = !s.boards && s.problems.length;
+    const what = s.source === 'hn' ? 'latest thread' : s.boards === 1 ? '1 feed' : `${s.boards} boards`;
+    const detail = skipped
+      ? `<span class="muted">${escapeHtml(s.problems[0].replace(/^[^:]+: (skipped: )?/, ''))}</span>`
+      : `${fmtInt(s.matched)} of ${fmtInt(s.scanned)} postings <span class="muted">(${what})</span>`
+        + (s.problems.length ? ` <span class="warn" title="${escapeHtml(s.problems.join('\n'))}">${s.problems.length} failed</span>` : '');
+    return `<li><strong>${escapeHtml(s.label)}</strong> ${detail}</li>`;
+  }).join('') + `<li class="muted">${fmtInt(total)} postings in all</li>`;
+}
+
+function highlight(text, keywords) {
+  const alts = keywords.map((k) => escapeHtml(k).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return escapeHtml(text).replace(new RegExp(`(?<![A-Za-z0-9])(${alts})(?![A-Za-z0-9])`, 'gi'), '<mark>$1</mark>');
+}
+
+function jobCard(j) {
+  const url = safeUrl(j.url);
+  const apply = safeUrl(j.applyUrl) ?? url;
+  const remoteTag = j.remote && !/remote/i.test(j.location) ? '<span class="tag">Remote</span>' : '';
+  const meta = [
+    `<span class="job-company">${escapeHtml(j.company)}</span>`,
+    j.location ? escapeHtml(j.location) : '<span class="muted">Location not listed</span>',
+    j.posted ? `<span class="muted">${escapeHtml(postedLabel(j.posted))}</span>` : '',
+    `<span class="muted">via ${escapeHtml(jobsData.sources.find((s) => s.source === j.source)?.label ?? j.source)}</span>`,
+  ].filter(Boolean).join(' · ');
+  return `<article class="job" data-id="${escapeHtml(j.id)}">
+    <h3 class="job-title">${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(j.title)}</a>` : escapeHtml(j.title)}</h3>
+    <div class="job-meta">${meta}</div>
+    <div class="job-tags"><span class="tag${isFocused(j) ? ' is-focus' : ''}">${escapeHtml(strengthLabel(j))}</span>${remoteTag}${j.salary ? `<span class="tag">${escapeHtml(j.salary)}</span>` : ''}</div>
+    ${j.snippet ? `<p class="job-snippet">${highlight(j.snippet, j.keywords)}</p>` : ''}
+    <div class="job-actions">
+      ${apply ? `<a class="btn-primary" href="${escapeHtml(apply)}" target="_blank" rel="noopener noreferrer">Apply</a>` : ''}
+      <button type="button" class="ghost" data-prep>Copy for prep</button>
+      <button type="button" class="linklike" data-read aria-expanded="false">Read posting</button>
+    </div>
+    <p class="prep-msg status" role="status"></p>
+    <div class="job-text" hidden></div>
+  </article>`;
+}
+
+function renderJobs(anywhere) {
+  const kw = jobsData.keywords.join(', ');
+  const metroLabel = state.metro && core.metroById.get(state.metro)?.regionLabel;
+  const n = jobsListed.length;
+  $('#jobs-title').textContent = metroLabel
+    ? `${fmtInt(n)} posting${n === 1 ? '' : 's'} in ${metroLabel}`
+    : `${fmtInt(n)} posting${n === 1 ? '' : 's'} mentioning ${kw}`;
+  $('#jobs-clear-metro').hidden = !state.metro;
+  const onMap = anywhere.filter((j) => j.regionIds.length).length;
+  $('#jobs-count').textContent = `${fmtInt(anywhere.length)} of ${fmtInt(jobsData.jobs.length)} postings match. ${fmtInt(onMap)} have a US city and are on the map.`;
+  const shown = jobsListed.slice(0, jobsShown);
+  $('#jobs-list').innerHTML = shown.length
+    ? shown.map(jobCard).join('') + (n > shown.length
+      ? `<button type="button" class="ghost more-jobs" data-more>Show ${fmtInt(Math.min(JOBS_PAGE, n - shown.length))} more of ${fmtInt(n - shown.length)}</button>` : '')
+    : '<p class="muted">No postings match these filters.</p>';
+}
+
+async function jobText(id) {
+  try {
+    return (await loadJobText())[id] ?? '';
+  } catch (err) {
+    console.error(err);
+    return '';
+  }
+}
+
+function wireJobs() {
+  for (const tab of document.querySelectorAll('[data-mode]')) {
+    tab.addEventListener('click', () => setMode(tab.dataset.mode));
+  }
+  let typing;
+  $('#job-q').addEventListener('input', (e) => {
+    clearTimeout(typing);
+    typing = setTimeout(() => { state.q = e.target.value.trim(); jobsShown = JOBS_PAGE; refresh(); }, 150);
+  });
+  for (const r of document.querySelectorAll('input[name="where"]')) {
+    r.addEventListener('change', () => { state.where = r.value; jobsShown = JOBS_PAGE; refresh(); });
+  }
+  $('#job-focus').addEventListener('change', (e) => { state.focus = e.target.checked; jobsShown = JOBS_PAGE; refresh(); });
+  $('#jobs-clear-metro').addEventListener('click', () => selectMetro(null));
+
+  $('#jobs-list').addEventListener('click', async (e) => {
+    if (e.target.closest('[data-more]')) {
+      jobsShown += JOBS_PAGE;
+      renderJobs(filterJobs(jobsData.jobs, { q: state.q, where: state.where, focus: state.focus }));
+      return;
+    }
+    const card = e.target.closest('.job');
+    const job = card && jobsById.get(card.dataset.id);
+    if (!job) return;
+    const textEl = card.querySelector('.job-text');
+    const readBtn = card.querySelector('[data-read]');
+    const showText = async () => {
+      if (!textEl.dataset.loaded) {
+        textEl.textContent = (await jobText(job.id)) || 'Full text is not available for this posting. Open it on the employer\'s site.';
+        textEl.dataset.loaded = '1';
+      }
+      textEl.hidden = false;
+      readBtn.setAttribute('aria-expanded', 'true');
+      readBtn.textContent = 'Hide posting';
+    };
+    if (e.target.closest('[data-read]')) {
+      if (textEl.hidden) await showText();
+      else {
+        textEl.hidden = true;
+        readBtn.setAttribute('aria-expanded', 'false');
+        readBtn.textContent = 'Read posting';
+      }
+    }
+    if (e.target.closest('[data-prep]')) {
+      const msg = card.querySelector('.prep-msg');
+      const posting = postingForPrep(job, await jobText(job.id));
+      try {
+        await navigator.clipboard.writeText(posting);
+        msg.className = 'prep-msg status ok';
+        msg.innerHTML = 'Copied. In Terminal, from the project folder, run:<br><code class="cmd">pbpaste | .venv/bin/python apply/jobprep.py prep</code>';
+      } catch {
+        await showText();
+        msg.className = 'prep-msg status warn';
+        msg.textContent = 'This browser blocked clipboard access. Select the posting text below, copy it, then run: pbpaste | .venv/bin/python apply/jobprep.py prep';
+      }
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +491,34 @@ function removeOccupation(code) {
 }
 
 const KIND_LABEL = { title: 'title', tool: 'tool', skill: 'skill', word: 'word' };
+
+// Shown first in the language row; any other language in the data is reachable through search.
+const FEATURED_LANGUAGES = ['Rust', 'Python', 'JavaScript', 'TypeScript', 'Go', 'Java', 'C++', 'C#'];
+
+function languageCodes(lang) {
+  return occupationsByLanguage(core.occupations, lang).map((o) => o.code);
+}
+
+function pickLanguage(lang) {
+  state.occ = languageCodes(lang);
+  state.evidence.clear();
+  refresh({ push: true });
+  renderSuggestionsState();
+}
+
+function renderLanguages() {
+  const sameSet = (codes) => codes.length === state.occ.length && codes.every((c) => state.occ.includes(c));
+  const active = core.languages.find(([lang]) => sameSet(languageCodes(lang)))?.[0];
+  for (const btn of document.querySelectorAll('#lang-picks [data-lang]')) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.lang === active));
+  }
+  const note = $('#lang-note');
+  note.hidden = !active;
+  if (active) {
+    const n = state.occ.length;
+    note.textContent = `O*NET lists ${active} for ${n} occupation${n === 1 ? '' : 's'}. Government data has no per-language job counts, so this shows where those occupations are concentrated.`;
+  }
+}
 
 function renderChips() {
   const el = $('#chips');
@@ -466,7 +737,8 @@ async function init() {
     return;
   }
   const { meta } = core;
-  $('#vintage').textContent = `${meta.vintage.label}: not live job postings`;
+  occVintage = `${meta.vintage.label}: not live job postings`;
+  $('#vintage').textContent = occVintage;
   $('#about-vintage').textContent = meta.vintage.note;
   $('#about-sources').innerHTML = meta.sources.map((s) => `<li>${escapeHtml(s)}</li>`).join('');
   if (meta.partial) banner('This is a partial build limited to a few occupations (build_data.py --occ).');
@@ -474,8 +746,17 @@ async function init() {
   searchIndex = buildSearchIndex(core.occupations);
   state.occ = state.occ.filter((c) => core.occByCode.has(c));
   if (state.metro && !core.metroById.has(state.metro)) state.metro = null;
+  core.languages = languageCounts(core.occupations);
+  const counts = new Map(core.languages);
+  $('#lang-picks').innerHTML = FEATURED_LANGUAGES.filter((l) => counts.has(l))
+    .map((l) => `<button type="button" class="pill" data-lang="${escapeHtml(l)}" aria-pressed="false" title="${counts.get(l)} occupation${counts.get(l) === 1 ? '' : 's'}">${escapeHtml(l)}</button>`).join('');
+  $('#lang-picks').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lang]');
+    if (btn) pickLanguage(btn.dataset.lang);
+  });
   wirePicker();
   wireResume();
+  wireJobs();
 
   const examples = ['15-1252', '29-1141', '17-2171', '27-2011'].filter((c) => core.occByCode.has(c));
   $('#examples').innerHTML = examples.map((c) => `<button type="button" class="pill" data-code="${c}">${escapeHtml(core.occByCode.get(c).label)}</button>`).join('');

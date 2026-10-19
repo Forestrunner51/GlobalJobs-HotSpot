@@ -133,6 +133,10 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 .examples { display: flex; flex-wrap: wrap; gap: 6px; }
 .pill { border: 1px solid var(--line); background: var(--panel-2); border-radius: 999px; padding: 3px 10px; font-size: 0.85rem; }
 .pill:hover { border-color: var(--accent); }
+.pill[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.lang-pick { margin-top: 10px; }
+.lang-pick .hint { margin: 0 0 6px; }
+.lang-pick #lang-note { margin-top: 8px; }
 .loading { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; font-size: 0.85rem; }
 
 .legend { position: absolute; right: 12px; bottom: 12px; width: 240px; max-width: calc(100% - 24px); background: rgb(11 16 23 / 0.88); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 0.78rem; }
@@ -210,6 +214,37 @@ dialog::backdrop { background: rgb(0 0 0 / 0.6); }
 dialog p, dialog li { font-size: 0.92rem; }
 
 /* ---- responsive ---- */
+/* ---- job postings ---- */
+.mode-switch button { padding: 6px 12px; }
+.segmented.three { grid-template-columns: repeat(3, 1fr); margin-top: 10px; }
+.text-input { width: 100%; padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.88rem; cursor: pointer; }
+.check input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.steps { margin: 0; padding-left: 20px; font-size: 0.85rem; display: grid; gap: 8px; }
+.cmd { display: inline-block; margin: 4px 0; font-size: 0.78rem; overflow-wrap: anywhere; }
+.sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.83rem; }
+.warn { color: var(--warn); }
+.jobs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.jobs-head h2 { margin: 0; }
+.jobs-list { display: grid; gap: 10px; }
+.job { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
+.job-title { margin: 0; font-size: 1rem; }
+.job-title a { color: var(--text); text-decoration: none; }
+.job-title a:hover { color: var(--accent); text-decoration: underline; }
+.job-meta { margin-top: 3px; font-size: 0.85rem; overflow-wrap: anywhere; }
+.job-company { font-weight: 600; }
+.job-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tag { font-size: 0.75rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); }
+.tag.is-focus { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.job-snippet { margin: 8px 0 0; font-size: 0.85rem; color: var(--muted); overflow-wrap: anywhere; }
+.job-snippet mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); border-radius: 3px; padding: 0 2px; }
+.job-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.btn-primary { display: inline-block; background: var(--accent); color: var(--accent-ink); font-weight: 600; text-decoration: none; border-radius: 8px; padding: 6px 16px; }
+.btn-primary:hover { filter: brightness(1.08); }
+.prep-msg { margin: 8px 0 0; }
+.job-text { margin-top: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; font-size: 0.85rem; max-height: 420px; overflow-y: auto; overflow-wrap: anywhere; }
+.more-jobs { justify-self: center; }
+
 @media (max-width: 1100px) {
   .layout.has-detail { grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); }
   .layout.has-detail .detail { grid-column: 1 / -1; position: static; max-height: none; }
@@ -221,4 +256,6 @@ dialog p, dialog li { font-size: 0.92rem; }
   .viewport { height: 56vh; min-height: 300px; }
   .legend { width: auto; left: 12px; }
   .brand { gap: 6px; }
+  .mode-switch { width: 100%; }
+  .mode-switch button { flex: 1; }
 }

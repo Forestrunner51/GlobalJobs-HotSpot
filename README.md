@@ -4,6 +4,9 @@ A static web app that shows where in the US specific occupations are concentrate
 a 2D map and a ranked table. Upload a resume to get suggested occupations. The resume is parsed
 in your browser and never leaves your machine.
 
+A second tab, **Job postings**, lists live openings that mention a keyword (Rust by default), puts
+them on the same globe, and hands any posting to `apply/jobprep.py` to draft a tailored application.
+
 There is no backend. `build_data.py` runs once, offline, and writes static JSON into `web/data/`.
 The `web/` directory is the entire site.
 
@@ -15,6 +18,44 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python build_data.py
 python3 -m http.server 8000 -d web      # open http://localhost:8000
 ```
+
+## Job postings
+
+```sh
+python3 jobs/fetch_jobs.py        # about 15 seconds; writes web/data/jobs.json and jobs-text.json
+```
+
+Then open the site's **Job postings** tab. `jobs/sources.json` sets the keywords and the company
+boards to read. The script uses only the standard library, so it doesn't need the venv.
+
+| Source | How | Key |
+| --- | --- | --- |
+| Greenhouse, Lever, Ashby | Public job-board APIs of each company in `sources.json` | None |
+| Hacker News | Latest "Ask HN: Who is hiring?" thread, via the Algolia HN API | None |
+| Adzuna | Keyword search, US | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` (free at developer.adzuna.com) |
+| USAJobs | Keyword search, federal jobs | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` (free at developer.usajobs.gov) |
+
+Sources without keys are skipped and listed as skipped in the sidebar. A failing board is reported
+and the rest still load. To add a company, find its board name in its careers-page URL
+(`job-boards.greenhouse.io/<board>`, `jobs.lever.co/<board>`, `jobs.ashbyhq.com/<board>`).
+
+How postings are matched and placed:
+
+- A posting is kept if the keyword appears in its title or text, as a whole word, so "Rust" doesn't
+  match "trust". **Focused** postings have it in the title or mention it at least twice. The rest list
+  it once, usually among several languages.
+- Locations are matched to metro areas by city and state, including common suburbs (Irvine to
+  Los Angeles, Waltham to Boston). Remote and non-US postings stay in the list but aren't on the map.
+- Adzuna and USAJobs return only part of each posting's text, so their results are trusted as
+  matches even when the returned snippet doesn't include the keyword.
+
+To apply: **Copy for prep** puts the posting text on the clipboard, then
+`pbpaste | .venv/bin/python apply/jobprep.py prep` drafts the memo and email (see `apply/README.md`).
+**Apply** opens the employer's own application page. Nothing is submitted automatically.
+
+The Pages workflow fetches fresh postings before every deploy and daily at 12:00 UTC. Add the
+optional keys as repository secrets with the same names. GitHub only runs scheduled workflows from
+the default branch, so the daily refresh starts once this workflow is on `main`.
 
 ## Source data (all public, no API keys)
 
@@ -45,6 +86,13 @@ O*NET 31.0 renamed several tables. The loader accepts both the old and new names
 | Alternate titles | `Alternate Titles.txt` | `Job Titles.txt` + `Sample of Reported Titles.txt` |
 
 O*NET codes such as `15-1252.00` are cut down to 6-digit SOC codes (`15-1252`) and merged.
+
+Each occupation also gets a `languages` list (Rust, Python, Go, ...) taken from the *full* software
+list, before the 25-item `tech` cut, so rare entries like Rust survive. The patterns are in
+`LANGUAGES` in `build_data.py`. The sidebar's "Jobs that use a language" buttons and a search like
+`rust jobs` select those occupations. These are occupations O*NET says use the language, not job
+postings for it: O*NET 31.0 lists Rust only for penetration testers and blockchain engineers, which
+both roll up to 15-1299 (Computer Occupations, All Other).
 
 ## Pipeline (`build_data.py`)
 
@@ -103,7 +151,8 @@ The page's Content Security Policy allows only same-origin scripts and connectio
 | `globe.js` | globe.gl view. Merged point geometry (one draw call), DOM labels limited by zoom, render loop pauses when idle or the tab is hidden, pixel ratio capped at 2, 1K texture on phones, no auto-rotate. |
 | `matcher.js` | v1 resume matching: IDF-weighted n-gram overlap with titles, alternate titles, tools and skills. Shows which terms matched. |
 | `resume.js` | PDF/DOCX/TXT text extraction in the browser, including detection of scanned (image-only) PDFs. |
-| `state.js` | Selected occupations, metric, floor and metro kept in the URL. |
+| `state.js` | Selected occupations, metric, floor, metro, tab and job filters kept in the URL. |
+| `jobs.js` | Job postings: filters, per-metro counts for the map, and the text handed to `jobprep.py`. |
 
 Add `?nowebgl` to any URL to force the fallback view.
 
@@ -121,7 +170,8 @@ Add `?nowebgl` to any URL to force the fallback view.
 ## Tests
 
 ```sh
-node --test tests/js/*.test.mjs        # ranking, matching, search, URL state, scale
+node --test tests/js/*.test.mjs                 # ranking, matching, search, URL state, scale, job filters
+python3 -m unittest tests/test_fetch_jobs.py   # job keyword, location and Hacker News parsing
 ```
 
 ## Verification checklist
@@ -161,8 +211,7 @@ Rendering layer:
 - **v2 embedding matching** (spec §5.2): precomputed occupation vectors, quantized binary,
   `transformers.js` in the browser. Before it ships, the model weights must be vendored or the CSP
   loosened, and the privacy copy re-checked.
-- Non-US sources, job postings, accounts: out of scope for v1. The record schema is ready for
-  non-US data.
+- Non-US sources and accounts: out of scope for v1. The record schema is ready for non-US data.
 
 ## Deployment
 

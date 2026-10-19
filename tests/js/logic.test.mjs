@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { aggregate, markerSubset, classify } from '../../web/js/aggregate.js';
 import { buildMatcher, tokenize } from '../../web/js/matcher.js';
-import { buildSearchIndex, searchOccupations } from '../../web/js/search.js';
+import { buildSearchIndex, searchOccupations, languageCounts, occupationsByLanguage } from '../../web/js/search.js';
 import { readState, stateToSearch } from '../../web/js/state.js';
 import { makeScale } from '../../web/js/scale.js';
 
@@ -80,11 +80,31 @@ test('search finds label and alternate titles', () => {
   assert.equal(viaTitle[0].via, 'Reservoir Engineer');
 });
 
+test('search finds occupations by programming language', () => {
+  const occs = [
+    { code: '15-1299', label: 'Computer Occupations, All Other', titles: ['Blockchain Engineer'], languages: ['Rust', 'Python'], nationalEmployment: 400 },
+    { code: '15-1252', label: 'Software Developers', titles: [], languages: ['Python'], nationalEmployment: 1600 },
+    { code: '13-2052', label: 'Personal Financial Advisors', titles: ['Trust Officer'], languages: [], nationalEmployment: 300 },
+  ];
+  const idx = buildSearchIndex(occs);
+  for (const q of ['rust', 'Rust jobs', 'rust developer']) {
+    const res = searchOccupations(idx, q);
+    assert.deepEqual(res.map((r) => r.occ.code), ['15-1299'], q);
+    assert.equal(res[0].via, 'uses Rust');
+  }
+  assert.equal(searchOccupations(idx, 'trust')[0].via, 'Trust Officer');
+  assert.deepEqual(occupationsByLanguage(occs, 'Python').map((o) => o.code), ['15-1252', '15-1299']);
+  assert.deepEqual(languageCounts(occs), [['Python', 2], ['Rust', 1]]);
+});
+
 test('URL state round-trips and rejects junk', () => {
-  const s = { occ: ['15-1252', '17-2171'], metric: 'employment', floor: 100, metro: '26420' };
+  const s = { occ: ['15-1252', '17-2171'], metric: 'employment', floor: 100, metro: '26420',
+    mode: 'occ', q: '', where: 'all', focus: false };
   assert.deepEqual(readState(stateToSearch(s)), s);
-  assert.deepEqual(readState('?occ=bad,15-1252&metric=x&floor=-3&metro=abc'),
-    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null });
+  const jobs = { ...s, mode: 'jobs', q: 'backend', where: 'remote', focus: true };
+  assert.deepEqual(readState(stateToSearch(jobs)), jobs);
+  assert.deepEqual(readState('?occ=bad,15-1252&metric=x&floor=-3&metro=abc&mode=x&where=moon'),
+    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null, mode: 'occ', q: '', where: 'all', focus: false });
 });
 
 test('LQ color scale uses a fixed log domain', () => {
@@ -92,4 +112,45 @@ test('LQ color scale uses a fixed log domain', () => {
   assert.equal(s.t(0.5), 0);
   assert.equal(s.t(8), 1);
   assert.ok(Math.abs(s.t(2) - 0.5) < 1e-9); // 2x is the log midpoint of 0.5x..8x
+});
+
+import { filterJobs, jobMarkers, isFocused, strengthLabel, postingForPrep, safeUrl } from '../../web/js/jobs.js';
+
+const JOBS = [
+  { id: 'a', title: 'Rust Engineer', company: 'Acme', location: 'Seattle, WA', regionIds: ['42660'], us: true, remote: false, keywords: ['Rust'], inTitle: true, mentions: 4, url: 'https://x/a', applyUrl: 'https://x/a/apply' },
+  { id: 'b', title: 'Backend Engineer', company: 'Beta', location: 'Remote (US) | Seattle, WA', regionIds: ['42660'], us: true, remote: true, keywords: ['Rust'], inTitle: false, mentions: 1, url: 'https://x/b' },
+  { id: 'c', title: 'Systems Engineer', company: 'Gamma', location: 'Berlin', regionIds: [], us: false, remote: false, keywords: ['Rust'], inTitle: false, mentions: 2, url: 'https://x/c' },
+  { id: 'd', title: 'SRE', company: 'Delta', location: 'New York, NY', regionIds: ['35620'], us: true, remote: false, keywords: ['Rust'], inTitle: false, mentions: 1, url: 'javascript:alert(1)' },
+];
+const METRO_BY_ID = new Map([
+  ['42660', { regionLabel: 'Seattle-Tacoma-Bellevue, WA', lat: '47.6', lng: '-122.0' }],
+  ['35620', { regionLabel: 'New York-Newark-Jersey City, NY-NJ', lat: '40.7', lng: '-74.0' }],
+]);
+
+test('filterJobs: location, focus, metro and text filters combine', () => {
+  const ids = (opts) => filterJobs(JOBS, opts).map((j) => j.id);
+  assert.deepEqual(ids({}), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(ids({ where: 'us' }), ['a', 'b', 'd']);
+  assert.deepEqual(ids({ where: 'remote' }), ['b']);
+  assert.deepEqual(ids({ focus: true }), ['a', 'c']);
+  assert.deepEqual(ids({ metro: '42660' }), ['a', 'b']);
+  assert.deepEqual(ids({ q: 'engineer seattle' }), ['a', 'b']);
+  assert.deepEqual(ids({ q: 'gamma' }), ['c']);
+});
+
+test('jobMarkers counts postings per metro, most first', () => {
+  const m = jobMarkers(JOBS, METRO_BY_ID);
+  assert.deepEqual(m.map((x) => [x.regionId, x.value]), [['42660', 2], ['35620', 1]]);
+  assert.equal(m[0].lat, 47.6);
+  assert.deepEqual(m[0].jobs.map((j) => j.id), ['a', 'b']);
+});
+
+test('job strength labels and prep text', () => {
+  assert.ok(isFocused(JOBS[0]) && !isFocused(JOBS[1]) && isFocused(JOBS[2]));
+  assert.equal(strengthLabel(JOBS[0]), 'Rust in title');
+  assert.equal(strengthLabel(JOBS[1]), 'mentions Rust once');
+  assert.equal(strengthLabel(JOBS[2]), 'mentions Rust 2×');
+  const text = postingForPrep(JOBS[0], 'Build things in Rust.');
+  assert.match(text, /^Source: https:\/\/x\/a\nApply: https:\/\/x\/a\/apply\n\nRust Engineer\nAcme · Seattle, WA\n\nBuild things in Rust\.$/);
+  assert.equal(safeUrl(JOBS[3].url), null);
 });
