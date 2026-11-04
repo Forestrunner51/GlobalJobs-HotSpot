@@ -1,11 +1,13 @@
-"""Prep tailored job applications: a one-page memo PDF and an email draft per posting.
+"""Prep tailored job applications: a one-page memo PDF, an email draft, and answers for the
+questions application forms ask ("Why this company?", a short cover note), per posting.
 
-Nothing is sent. Each run writes a folder under apply/out/ for you to review, and
+Nothing is sent or submitted. Each run writes a folder under apply/out/ for you to review, and
 records the application in apply/tracker.csv so follow-ups don't slip.
 
     python apply/jobprep.py prep --url https://company.com/jobs/123 --to jane@company.com
     python apply/jobprep.py prep --file posting.txt
     pbpaste | python apply/jobprep.py prep
+    python apply/jobprep.py batch ~/Downloads/prep-batch-2026-10-19.json   # saved postings from the site
     python apply/jobprep.py render apply/out/2026-10-07_acme_web-developer
     python apply/jobprep.py list
     python apply/jobprep.py mark 2026-10-07_acme_web-developer sent
@@ -29,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 PROFILE = HERE / "profile.md"
 OUT_DIR = HERE / "out"
 TRACKER = HERE / "tracker.csv"
-TRACKER_FIELDS = ["id", "created", "company", "role", "to", "status", "sent", "follow_up"]
+TRACKER_FIELDS = ["id", "created", "company", "role", "to", "status", "sent", "follow_up", "job_id", "url"]
 FOLLOW_UP_DAYS = 6
 MODEL = "claude-opus-5-5"
 
@@ -56,8 +58,15 @@ class Memo(BaseModel):
     closing: str = Field(description="One or two sentences ending the memo")
 
 
+class FormAnswers(BaseModel):
+    why_company: str = Field(description="2-3 sentences answering 'Why do you want to work here?', tied to specifics in the posting")
+    why_role: str = Field(description="2-3 sentences answering 'Why are you a good fit for this role?', citing profile facts")
+    cover_note: str = Field(description="Under 150 words for a cover letter text box: who I am, the fit, one concrete result")
+
+
 class Application(BaseModel):
     memo: Memo
+    form_answers: FormAnswers
     email_subject: str
     email_body: str = Field(description="Under 150 words, mentions the attached memo, signed with name and contact")
     recipient_name: str = Field(description="Hiring manager or recruiter name if the posting gives one, else empty")
@@ -72,7 +81,8 @@ Rules:
 - Pick the experience and the single accomplishment that best match what this posting asks for.
 - Write plainly and specifically. No buzzwords ("passionate", "synergy", "rockstar"), no flattery of the company.
 - If the posting asks for something the profile doesn't show, list it under gaps. Don't claim it.
-- The email is short: who they are, the role, one concrete reason they fit, that a one-page memo is attached, a polite ask for a conversation."""
+- The email is short: who they are, the role, one concrete reason they fit, that a one-page memo is attached, a polite ask for a conversation.
+- Form answers are for pasting into the employer's application form. Same rules: only facts from the profile and the posting, specific to this company and role, first person, no clichés."""
 
 
 # ---------------------------------------------------------------- posting input
@@ -234,16 +244,36 @@ def slug(s: str) -> str:
 
 # ---------------------------------------------------------------- commands
 
-def cmd_prep(args):
+def posting_meta(posting: str) -> tuple[str, str]:
+    """The site's Job ID and the best link, from the header "Copy for prep" adds to a posting."""
+    job_id = re.search(r"^Job ID: (\S+)", posting, re.M)
+    url = re.search(r"^Apply: (\S+)", posting, re.M) or re.search(r"^Source: (\S+)", posting, re.M)
+    return (job_id.group(1) if job_id else ""), (url.group(1) if url else "")
+
+
+def require_profile() -> str:
     if not PROFILE.exists():
         sys.exit(f"Missing {PROFILE}. Copy profile.example.md to profile.md and fill it in.")
+    return PROFILE.read_text()
+
+
+def cmd_prep(args):
+    profile = require_profile()
     posting = read_posting(args).strip()
     if not posting:
         sys.exit("No posting text given.")
+    print("Writing memo, email and form answers...", file=sys.stderr)
+    app_id, folder, notes = prep_one(profile, posting, args.to, args.note)
+    print(f"\n{folder}\n")
+    print("\n".join(notes))
+    print(f"\nWhen you've sent it: python apply/jobprep.py mark {app_id} sent")
 
-    print("Writing memo and email...", file=sys.stderr)
-    app = generate(PROFILE.read_text(), posting, args.note)
+
+def prep_one(profile: str, posting: str, to: str | None = None, note: str = "") -> tuple[str, Path, list[str]]:
+    """Generate and write one application folder; returns (id, folder, review notes)."""
+    app = generate(profile, posting, note)
     memo = app.memo
+    job_id, url = posting_meta(posting)
 
     today = dt.date.today().isoformat()
     app_id = f"{today}_{slug(memo.company)}_{slug(memo.role)}"
@@ -259,7 +289,7 @@ def cmd_prep(args):
     (folder / "memo.json").write_text(memo.model_dump_json(indent=2))
     pdf_name = f"{slug(memo.candidate_name)}-{slug(memo.company)}.pdf"
     render_pdf(memo, folder / pdf_name)
-    greeting_to = f"{app.recipient_name} <{args.to}>" if app.recipient_name and args.to else args.to or ""
+    greeting_to = f"{app.recipient_name} <{to}>" if app.recipient_name and to else to or ""
     (folder / "email.txt").write_text(
         f"To: {greeting_to}\nSubject: {app.email_subject}\nAttach: {pdf_name}\n\n{app.email_body}\n"
     )
@@ -267,15 +297,60 @@ def cmd_prep(args):
     checks = [f"- {v}" for v in app.verify] or ["- nothing flagged"]
     notes = ["GAPS (posting asks for, profile doesn't show):", *gaps, "", "DOUBLE-CHECK:", *checks]
     (folder / "review.txt").write_text("\n".join(notes) + "\n")
+    fa = app.form_answers
+    (folder / "answers.txt").write_text(
+        "Paste these into the application form. Check every sentence first.\n\n"
+        f"WHY THIS COMPANY\n{fa.why_company}\n\nWHY THIS ROLE / WHY YOU\n{fa.why_role}\n\n"
+        f"COVER NOTE\n{fa.cover_note}\n" + (f"\nAPPLY AT\n{url}\n" if url else ""))
 
     rows = load_tracker()
     rows.append({"id": app_id, "created": today, "company": memo.company, "role": memo.role,
-                 "to": args.to or "", "status": "drafted", "sent": "", "follow_up": ""})
+                 "to": to or "", "status": "drafted", "sent": "", "follow_up": "", "job_id": job_id, "url": url})
     save_tracker(rows)
+    return app_id, folder, [f"{memo.role} at {memo.company}", *notes]
 
-    print(f"\n{memo.role} at {memo.company}\n  {folder}\n")
-    print("\n".join(notes))
-    print(f"\nWhen you've sent it: python apply/jobprep.py mark {app_id} sent")
+
+def cmd_batch(args):
+    """Prep every posting in a batch file downloaded from the site ("Download saved for prep")."""
+    profile = require_profile()
+    try:
+        data = json.loads(Path(args.file).expanduser().read_text())
+    except (OSError, ValueError) as e:
+        sys.exit(f"Could not read {args.file}: {e}")
+    if data.get("format") != "jobglobal-prep-batch":
+        sys.exit(f"{args.file} isn't a prep batch from the site (use its \"Download saved for prep\" button).")
+    done = {r.get("job_id") for r in load_tracker() if r.get("job_id")}
+    postings = [p for p in data.get("postings", []) if args.redo or p.get("id") not in done]
+    skipped = len(data.get("postings", [])) - len(postings)
+    if skipped:
+        print(f"Skipping {skipped} already prepped (use --redo to prep them again).")
+    if not postings:
+        print("Nothing to prep.")
+        return
+    for i, p in enumerate(postings, 1):
+        print(f"  {i:>2}. {p.get('title', '?')} at {p.get('company', '?')}")
+    if not args.yes:
+        answer = input(f"\nPrep these {len(postings)}? Each is one Claude API call (usually a few cents). [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+    made, failed = [], []
+    for i, p in enumerate(postings, 1):
+        print(f"\n[{i}/{len(postings)}] {p.get('title')} at {p.get('company')}...", file=sys.stderr)
+        try:
+            app_id, folder, notes = prep_one(profile, p["text"], note=args.note)
+        except (Exception, SystemExit) as e:  # one bad posting shouldn't stop the rest
+            failed.append(f"{p.get('title')} at {p.get('company')}: {e}")
+            print(f"  failed: {e}", file=sys.stderr)
+            continue
+        made.append((app_id, folder))
+        print(f"  {folder}  (gaps and things to check: review.txt)")
+    print(f"\nPrepped {len(made)} of {len(postings)}." + (f" {len(failed)} failed:" if failed else ""))
+    for f in failed:
+        print(f"  {f}")
+    if made:
+        print("\nFor each: read review.txt, send the email or open the posting and paste from answers.txt,")
+        print("then: python apply/jobprep.py mark <id> sent   (ids are the folder names above)")
 
 
 def cmd_render(args):
@@ -327,6 +402,13 @@ def main():
     prep.add_argument("--to", help="Recipient email, if you have one")
     prep.add_argument("--note", default="", help="Extra context, e.g. 'met them at a meetup'")
     prep.set_defaults(func=cmd_prep)
+
+    batch = sub.add_parser("batch", help="Prep every posting in a batch file saved from the site")
+    batch.add_argument("file", help="prep-batch-*.json from the site's \"Download saved for prep\"")
+    batch.add_argument("--yes", action="store_true", help="Don't ask before making API calls")
+    batch.add_argument("--redo", action="store_true", help="Also prep postings already in the tracker")
+    batch.add_argument("--note", default="", help="Extra context added to every posting")
+    batch.set_defaults(func=cmd_batch)
 
     render = sub.add_parser("render", help="Rebuild the PDF after editing memo.json")
     render.add_argument("folder")

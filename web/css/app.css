@@ -114,6 +114,13 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -3px; }
 .hint { font-size: 0.82rem; color: var(--muted); margin: 8px 0; }
 .floor { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.85rem; }
+.floor select { padding: 5px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: inherit; font: inherit; }
+.years-pick { margin-top: 12px; }
+.lang-filter + .hint { margin: 6px 0 10px; }
+.place-pick { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; margin-top: 12px; }
+.place-pick select { width: 100%; min-width: 0; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: inherit; font: inherit; font-size: 0.88rem; }
+.pill .count { color: var(--muted); font-size: 0.78rem; margin-left: 4px; }
+.pill[aria-pressed="true"] .count { color: inherit; opacity: 0.75; }
 .floor input { width: 88px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; text-align: right; }
 
 /* ---- viz ---- */
@@ -217,6 +224,13 @@ dialog p, dialog li { font-size: 0.92rem; }
 /* ---- job postings ---- */
 .mode-switch button { padding: 6px 12px; }
 .segmented.three { grid-template-columns: repeat(3, 1fr); margin-top: 10px; }
+.segmented.spaced { margin-top: 10px; }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
+.segmented.four span { padding: 6px 2px; font-size: 0.8rem; line-height: 1.2; }
+.segmented .seg-count { display: block; font-size: 0.7rem; opacity: 0.75; font-weight: 400; font-variant-numeric: tabular-nums; }
+.field-label { font-size: 0.8rem; color: var(--muted); margin: 12px 0 6px; }
+.tag.is-new { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.changes { color: var(--text); }
 .text-input { width: 100%; padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.88rem; cursor: pointer; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
@@ -245,6 +259,46 @@ dialog p, dialog li { font-size: 0.92rem; }
 .job-text { margin-top: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; font-size: 0.85rem; max-height: 420px; overflow-y: auto; overflow-wrap: anywhere; }
 .more-jobs { justify-self: center; }
 
+/* ---- applying ---- */
+#my-apps .segmented { margin-top: 2px; }
+.due { display: block; margin-top: 8px; color: var(--warn); font-size: 0.85rem; }
+.mine-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.mine-more { margin-top: 8px; font-size: 0.85rem; }
+.mine-more summary { cursor: pointer; color: var(--muted); }
+.file-pick { cursor: pointer; }
+.ghost.small, .linklike.small { font-size: 0.82rem; }
+.ghost.small { padding: 4px 10px; }
+.keys-hint { margin: -4px 0 10px; font-size: 0.78rem; color: var(--muted); }
+kbd { font: inherit; font-size: 0.75rem; background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+.job:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.job.is-applied { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.job.is-gone { opacity: 0.75; }
+.job-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.82rem; }
+.status-chip { border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); }
+.status-chip.saved { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.status-chip.applied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.status-chip.due { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
+.job-actions .secondary { display: inline-flex; flex-wrap: wrap; gap: 10px; margin-left: auto; }
+[data-save][aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+.kit { position: fixed; right: var(--gutter); bottom: var(--gutter); z-index: 40; width: min(380px, calc(100vw - 2 * var(--gutter)));
+  max-height: min(78vh, 680px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; box-shadow: 0 16px 40px rgb(0 0 0 / 0.5); }
+.kit-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.kit-head strong { display: block; font-size: 0.95rem; }
+.kit-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.kit-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; padding: 6px 8px; background: var(--panel-2); border-radius: 6px; }
+.kit-label { font-size: 0.72rem; color: var(--muted); grid-column: 1; }
+.kit-value { font-size: 0.85rem; grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kit-list button { grid-column: 2; grid-row: 1 / span 2; }
+.kit-list button.copied { color: var(--ok); border-color: var(--ok); }
+.kit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.kit-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 12px; margin: 10px 0; }
+.kit-fields label, .kit-extra { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+.kit-fields input, .kit-extra textarea { width: 100%; padding: 7px 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 0.9rem; }
+.kit-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+#kit-editor { width: min(640px, calc(100vw - 2 * var(--gutter))); }
+
 @media (max-width: 1100px) {
   .layout.has-detail { grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); }
   .layout.has-detail .detail { grid-column: 1 / -1; position: static; max-height: none; }
@@ -257,5 +311,7 @@ dialog p, dialog li { font-size: 0.92rem; }
   .legend { width: auto; left: 12px; }
   .brand { gap: 6px; }
   .mode-switch { width: 100%; }
+  .kit-fields { grid-template-columns: minmax(0, 1fr); }
+  .job-actions .secondary { margin-left: 0; }
   .mode-switch button { flex: 1; }
 }

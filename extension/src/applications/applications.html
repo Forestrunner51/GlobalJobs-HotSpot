@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My applications</title>
+  <link rel="stylesheet" href="../ui.css">
+  <link rel="stylesheet" href="./applications.css">
+  <script type="module" src="./applications.ts"></script>
+</head>
+<body>
+  <header class="bar">
+    <div>
+      <h1>My applications</h1>
+      <p id="summary" class="small muted"></p>
+    </div>
+    <div class="bar-actions">
+      <button type="button" class="btn" id="export-csv">Export CSV</button>
+      <button type="button" class="btn" id="export-json">Back up</button>
+      <label class="btn file">Restore…<input type="file" id="import" accept="application/json,.json" hidden></label>
+    </div>
+  </header>
+
+  <main class="page">
+    <p class="small muted">Every job you filled with the extension, submitted, or marked applied on the job site, with its description as it was when you applied. Stored only in this browser. Back up now and then.</p>
+    <div class="filters">
+      <label class="grow">Search<input type="search" id="q" placeholder="Company, title, location or words in the description"></label>
+      <label>Status<select id="status"><option value="">All</option></select></label>
+    </div>
+    <p id="backup-note" class="small muted"></p>
+    <p id="msg" class="small" role="status"></p>
+    <div id="list" class="apps"></div>
+  </main>
+</body>
+</html>

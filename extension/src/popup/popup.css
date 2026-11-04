@@ -1,0 +1,6 @@
+body { width: 320px; }
+.popup { display: grid; gap: 10px; padding: 12px; }
+.card { display: grid; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.wide { width: 100%; }
+#fill-report { display: grid; gap: 4px; }
+#fill-report p { margin: 0; }

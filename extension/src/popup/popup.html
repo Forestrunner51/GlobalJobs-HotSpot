@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Job Application Autofill</title>
+  <link rel="stylesheet" href="../ui.css">
+  <link rel="stylesheet" href="./popup.css">
+  <script type="module" src="./popup.ts"></script>
+</head>
+<body>
+  <main class="popup">
+    <h1>Job Application Autofill</h1>
+
+    <section class="card" aria-labelledby="page-h">
+      <h2 id="page-h">This page</h2>
+      <p id="page-status" class="small">Checking…</p>
+      <button type="button" id="fill" class="btn primary wide" disabled>Fill this application</button>
+      <div id="fill-report" class="small" aria-live="polite" hidden></div>
+      <p class="small muted">Fills in fields only. You review every answer and submit it yourself. Submitted applications are saved to My applications.</p>
+      <button type="button" id="draft" class="btn wide" hidden>Draft open questions with Claude</button>
+      <button type="button" id="mark-applied" class="btn wide" hidden>I applied to this job</button>
+    </section>
+
+    <section class="card" aria-labelledby="profile-h">
+      <h2 id="profile-h">Your profile</h2>
+      <p id="profile-name" class="small"></p>
+      <p id="profile-missing" class="small"></p>
+      <button type="button" id="edit" class="btn wide">Edit profile</button>
+      <button type="button" id="history" class="btn wide">My applications</button>
+      <button type="button" id="due" class="linklike warn" hidden></button>
+    </section>
+  </main>
+</body>
+</html>

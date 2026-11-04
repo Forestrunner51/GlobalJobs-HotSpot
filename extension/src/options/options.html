@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autofill profile</title>
+  <link rel="stylesheet" href="../ui.css">
+  <link rel="stylesheet" href="./options.css">
+  <script type="module" src="./options.ts"></script>
+</head>
+<body>
+  <header class="bar">
+    <div>
+      <h1>Autofill profile</h1>
+      <p class="small muted">Stored only in this browser (chrome.storage.local). Nothing is uploaded.</p>
+    </div>
+    <div class="bar-actions">
+      <span id="save-status" class="small" role="status"></span>
+      <button type="submit" form="profile" class="btn primary" id="save">Save</button>
+    </div>
+  </header>
+
+  <form id="profile" class="page" novalidate>
+    <p id="resume-banner" class="banner" role="status" hidden></p>
+    <section>
+      <h2>Your resumes</h2>
+      <p class="small muted">Add your resume PDF and the profile is filled in from it: name, contact details, links, jobs, schools and skills (work eligibility and saved answers aren't on a resume, so they're kept). Add an updated resume any time: the newest one is used from then on, and the profile refreshes from it. To send a different resume for certain jobs, give it words to look for in the job title, such as <em>devsecops, security</em>. Changes are highlighted, and nothing is kept until you click Save.</p>
+      <div id="resumes" class="entries"></div>
+      <div class="row">
+        <label class="btn file">Add a resume PDF<input type="file" id="resume-file" accept="application/pdf,.pdf" hidden></label>
+        <span id="resume-status" class="small"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Contact</h2>
+      <div class="grid">
+        <label>First name<input type="text" data-key="firstName" autocomplete="given-name"></label>
+        <label>Last name<input type="text" data-key="lastName" autocomplete="family-name"></label>
+        <label>Preferred name (optional)<input type="text" data-key="preferredName"></label>
+        <label>Email<input type="email" data-key="email" autocomplete="email"></label>
+        <label>Phone<input type="tel" data-key="phone" autocomplete="tel"></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Address</h2>
+      <div class="grid">
+        <label class="span2">Street address<input type="text" data-key="address1" autocomplete="address-line1"></label>
+        <label>City<input type="text" data-key="city" autocomplete="address-level2"></label>
+        <label>State<input type="text" data-key="state" autocomplete="address-level1"></label>
+        <label>ZIP / postal code<input type="text" data-key="postalCode" autocomplete="postal-code"></label>
+        <label>Country<input type="text" data-key="country" autocomplete="country-name"></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Links</h2>
+      <div class="grid">
+        <label>LinkedIn<input type="url" data-key="linkedin" placeholder="https://www.linkedin.com/in/…"></label>
+        <label>GitHub<input type="url" data-key="github" placeholder="https://github.com/…"></label>
+        <label>Portfolio or website<input type="url" data-key="portfolio"></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Work eligibility</h2>
+      <div class="grid">
+        <label>Legally authorized to work in your country?
+          <select data-key="workAuthorized"><option value="">Not set</option><option value="yes">Yes</option><option value="no">No</option></select>
+        </label>
+        <label>Will you need visa sponsorship?
+          <select data-key="needsSponsorship"><option value="">Not set</option><option value="yes">Yes</option><option value="no">No</option></select>
+        </label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Work history</h2>
+      <div id="work" class="entries"></div>
+      <button type="button" class="btn" data-add="work">Add a job</button>
+    </section>
+
+    <section>
+      <h2>Education</h2>
+      <div id="education" class="entries"></div>
+      <button type="button" class="btn" data-add="education">Add a school</button>
+    </section>
+
+    <section>
+      <h2>Skills</h2>
+      <label>Comma-separated<textarea data-key="skills" rows="2" placeholder="Rust, Go, PostgreSQL, Kubernetes"></textarea></label>
+    </section>
+
+    <section>
+      <h2>Saved answers</h2>
+      <p class="small muted">Answers to questions forms ask often. When filling, the extension matches a form's question to the closest one here; unmatched questions are left blank for you.</p>
+      <div id="answers" class="entries"></div>
+      <button type="button" class="btn" data-add="answers">Add an answer</button>
+    </section>
+
+    <section>
+      <h2>Apply queue limits</h2>
+      <p class="small muted">The job site's <strong>Apply to saved with Autofill</strong> skips jobs past these limits, so you don't flood one company or apply to more than you can follow up on. 0 means no limit.</p>
+      <div class="grid three">
+        <label>New applications per day<input type="number" min="0" max="1000" id="limit-day"></label>
+        <label>Applications per company<input type="number" min="0" max="1000" id="limit-company"></label>
+        <label>…counted over this many days<input type="number" min="1" max="365" id="limit-days"></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Draft answers with Claude (optional)</h2>
+      <p class="small muted">With your own Anthropic API key, <strong>Draft open questions with Claude</strong> in the popup writes first drafts for questions like "Why do you want to work here?", for you to edit. Sent to Anthropic: the job's title, company and description, the questions, and your work history, education, skills and saved answers. Never sent: your name, email, phone, address or links. Each draft uses a few cents of API credit on your account. Get a key at console.anthropic.com.</p>
+      <label>Anthropic API key<input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-…"></label>
+    </section>
+
+    <section>
+      <h2>Back up and restore</h2>
+      <label class="check"><input type="checkbox" id="auto-backup"> Back up my application history every week, to <code>Downloads/job-autofill-backups/</code></label>
+      <p class="small muted">Your applications live only in this browser; removing the extension deletes them. Turning this on asks for permission to save downloads. The backup restores on the My applications page.</p>
+      <div class="row">
+        <button type="button" class="btn" id="export">Export profile</button>
+        <label class="small"><input type="checkbox" id="export-resume" checked> Include resume</label>
+        <label class="btn file">Import…<input type="file" id="import" accept="application/json,.json" hidden></label>
+      </div>
+      <p class="small muted">Import takes a file exported here, or a "Back up" file from the job site (its apply kit fills the basics).</p>
+      <p id="import-status" class="small" role="status"></p>
+    </section>
+  </form>
+</body>
+</html>

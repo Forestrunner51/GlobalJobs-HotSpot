@@ -40,25 +40,69 @@
   <main class="layout">
     <aside class="panel sidebar" aria-label="Filters">
       <div id="jobs-side" hidden>
+        <section id="my-apps">
+          <h2>My applications</h2>
+          <div id="mine-views" class="segmented four" role="radiogroup" aria-label="Which postings"></div>
+          <button type="button" id="due-line" class="linklike due" hidden></button>
+          <label class="check"><input type="checkbox" id="hide-done"> Hide postings I applied to or hid</label>
+          <div class="mine-actions">
+            <button type="button" class="ghost small" id="kit-open">Apply kit</button>
+            <button type="button" class="ghost small" id="batch-download">Download saved for prep</button>
+            <button type="button" class="ghost small" id="autofill-queue" hidden>Apply to saved with Autofill</button>
+            <button type="button" class="ghost small" id="autofill-history" hidden>Application history</button>
+          </div>
+          <p id="mine-msg" class="status" role="status"></p>
+          <details class="mine-more">
+            <summary>Export, back up, restore</summary>
+            <div class="mine-actions">
+              <button type="button" class="linklike small" id="export-csv">Export CSV</button>
+              <button type="button" class="linklike small" id="backup">Back up</button>
+              <label class="linklike small file-pick">Restore<input type="file" id="restore" accept="application/json,.json" hidden></label>
+            </div>
+          </details>
+          <p class="hint">Saved only in this browser. Back up to move it to another one.</p>
+        </section>
         <section>
           <h2>Job postings</h2>
+          <div id="job-langs" class="examples lang-filter" role="group" aria-label="Languages"></div>
+          <p class="hint">Pick one or more languages. With none picked, every posting shows.</p>
           <label for="job-q" class="sr-only">Filter postings</label>
           <input id="job-q" class="text-input" type="search" placeholder="Filter by title, company or city" autocomplete="off">
-          <div class="segmented three" role="radiogroup" aria-label="Location">
+          <div class="segmented spaced" role="radiogroup" aria-label="Location">
             <label><input type="radio" name="where" value="all" checked><span>Anywhere</span></label>
-            <label><input type="radio" name="where" value="us"><span>US</span></label>
-            <label><input type="radio" name="where" value="remote"><span>Remote</span></label>
+            <label><input type="radio" name="where" value="us"><span>US only</span></label>
           </div>
+          <p class="field-label">Work style</p>
+          <div id="job-work" class="segmented four" role="radiogroup" aria-label="Work style"></div>
+          <div class="place-pick">
+            <label for="job-state" class="small muted">State</label>
+            <select id="job-state"><option value="">All states</option></select>
+            <label for="job-city" class="small muted">City</label>
+            <select id="job-city"><option value="">All cities</option></select>
+          </div>
+          <label class="check"><input type="checkbox" id="job-fresh"> <span id="job-fresh-label">New in the last 7 days</span></label>
           <label class="check"><input type="checkbox" id="job-focus"> <span id="job-focus-label">Focused postings only</span></label>
-          <p class="hint">Focused means the keyword is in the title or mentioned at least twice, not just listed once among other languages.</p>
+          <p class="hint">Focused means the language is in the title or mentioned at least twice, not just listed once among others.</p>
           <p id="jobs-count" class="hint" aria-live="polite"></p>
+        </section>
+        <section>
+          <h2>Experience</h2>
+          <div id="job-levels" class="examples" role="group" aria-label="Level"></div>
+          <label class="floor years-pick">Years required, at most
+            <select id="job-years">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="job-years-known"> Only postings that state years</label>
+          <p class="hint">Level comes from the job title. "Mid / not stated" means the title doesn't say. Years come from phrases like "5+ years of experience"; about half of postings state them.</p>
         </section>
         <section>
           <h2>Apply quickly</h2>
           <ol class="steps">
-            <li>Press <strong>Copy for prep</strong> on a posting.</li>
-            <li>In Terminal, from the project folder:<br><code class="cmd">pbpaste | .venv/bin/python apply/jobprep.py prep</code><br>This writes a one-page memo PDF and an email tailored to that posting.</li>
-            <li>Press <strong>Apply</strong>, attach the memo, then run <code>apply/jobprep.py mark &lt;id&gt; sent</code> so follow-ups get tracked.</li>
+            <li><strong>☆ Save</strong> the postings you want (or press <kbd>s</kbd>).</li>
+            <li><strong>Download saved for prep</strong>, then in Terminal:<br><code class="cmd">.venv/bin/python apply/jobprep.py batch ~/Downloads/prep-batch-….json</code><br>Each gets a memo PDF, an email, and <code>answers.txt</code> with "why this company" and a cover note. It asks before using the API.</li>
+            <li>Press <strong>Apply</strong>. The employer's form opens in a new tab and your <strong>apply kit</strong> appears here with Copy buttons. Fill in the form, attach the memo, submit it yourself, then <strong>Mark as applied</strong>.</li>
+            <li>Follow-ups come due 6 days later under <strong>My applications</strong>.</li>
           </ol>
         </section>
         <section>
@@ -137,12 +181,33 @@
           <h2 id="jobs-title">Postings</h2>
           <button type="button" id="jobs-clear-metro" class="ghost small" hidden>Show all locations</button>
         </div>
+        <p class="keys-hint">Keys: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>s</kbd> save · <kbd>a</kbd> apply · <kbd>p</kbd> copy for prep · <kbd>r</kbd> read · <kbd>h</kbd> hide · <kbd>Esc</kbd> close kit</p>
         <div id="jobs-list" class="jobs-list"></div>
       </div>
     </section>
 
     <aside id="detail" class="panel detail" aria-label="Metro details" hidden></aside>
   </main>
+
+  <aside id="apply-kit" class="kit" aria-label="Apply kit" hidden></aside>
+
+  <dialog id="kit-editor" aria-labelledby="kit-editor-title">
+    <form method="dialog" id="kit-form">
+      <div class="dialog-head">
+        <h2 id="kit-editor-title">Apply kit</h2>
+        <button type="button" class="icon-btn" id="kit-cancel" aria-label="Close">×</button>
+      </div>
+      <p class="hint">Answers application forms ask for every time. When you press Apply on a posting, these appear with a Copy button each, so you can fill the employer's form fast. You still fill it in and submit it yourself. Stored only in this browser.</p>
+      <div id="kit-fields" class="kit-fields"></div>
+      <label class="kit-extra">Other saved answers
+        <textarea id="kit-extra" rows="6" placeholder="Anything else you paste often: a short bio, a project summary, an answer about remote work. Separate answers with a blank line; each gets its own Copy button."></textarea>
+      </label>
+      <div class="kit-form-actions">
+        <button type="button" class="ghost" id="kit-cancel-2">Cancel</button>
+        <button type="submit" class="btn-primary" id="kit-save">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="about" aria-labelledby="about-title">
     <div class="dialog-head">
@@ -161,7 +226,9 @@
     <h3>Coverage</h3>
     <p>US metropolitan statistical areas only. Rural and nonmetro areas, and all countries outside the US, are not included yet.</p>
     <h3>Job postings</h3>
-    <p>The postings tab lists live openings that mention your keywords (Rust by default). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. A posting can appear because it lists the keyword once among other languages; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Applying always happens on the employer's own site.</p>
+    <p>The postings tab lists live openings that mention the programming languages in <code>jobs/sources.json</code> (Rust, C++, Go, Python and others). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. A posting can appear because it lists a language once among several; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Hybrid comes from the location field or phrases like "3 days a week in the office"; On-site means a posting names a place and mentions neither, so some of those are really hybrid. Postings refresh automatically: closed roles drop out of company boards, and feed postings older than 60 days are removed. Applying always happens on the employer's own site.</p>
+    <h3>Applying</h3>
+    <p>Nothing on this site applies for you. Save postings, prepare tailored materials with <code>apply/jobprep.py</code>, then fill in and submit each application yourself on the employer's site. The apply kit only puts your own saved answers on the clipboard. Your saved postings, statuses and apply kit stay in this browser's storage and are never sent anywhere.</p>
     <h3>Sources</h3>
     <ul id="about-sources"></ul>
   </dialog>

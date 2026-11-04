@@ -1,8 +1,9 @@
 # Application prep
 
-Generates the prep work for one job application: a one-page memo PDF (who you worked for, what
-you know, what you did, one accomplishment) tailored to the posting, plus a short email. Nothing
-is sent. You review the files and send the email yourself.
+Generates the prep work for a job application: a one-page memo PDF (who you worked for, what
+you know, what you did, one accomplishment) tailored to the posting, a short email, and answers for
+the questions application forms ask. Nothing is sent or submitted. You review the files and apply
+yourself.
 
 ## Setup
 
@@ -26,6 +27,10 @@ pbpaste | .venv/bin/python apply/jobprep.py prep --to hiring@company.com
 # from the site's Job postings tab: press "Copy for prep" on a posting, then
 pbpaste | .venv/bin/python apply/jobprep.py prep
 
+# several at once: save postings on the site, press "Download saved for prep", then
+.venv/bin/python apply/jobprep.py batch ~/Downloads/prep-batch-2026-10-19.json
+# lists them and asks before making any API calls; skips postings already prepped (--redo to override)
+
 # add context the posting doesn't have
 ... prep --file posting.txt --note "Referred by Sam on their platform team"
 ```
@@ -36,6 +41,7 @@ Each run creates `apply/out/<date>_<company>_<role>/` containing:
 | --- | --- |
 | `<name>-<company>.pdf` | The memo to attach |
 | `email.txt` | To, subject and body, ready to paste |
+| `answers.txt` | "Why this company?", "Why this role?" and a short cover note, to paste into the application form |
 | `review.txt` | Requirements you don't cover yet, and claims to double-check |
 | `memo.json` | Memo content. Edit it, then run `render <folder>` to rebuild the PDF |
 | `posting.txt` | The posting, kept for later reference |
@@ -49,4 +55,10 @@ Each run creates `apply/out/<date>_<company>_<role>/` containing:
 .venv/bin/python apply/jobprep.py mark <id> replied    # or interview / rejected / offer
 ```
 
-Each `prep` costs about one Claude Opus 5.5 call, usually a few cents.
+Each posting costs about one Claude Opus 5.5 call, usually a few cents. Postings copied or downloaded
+from the site carry a `Job ID`, which is recorded in `tracker.csv` so `batch` can skip ones already done.
+
+On the site, **My applications** tracks what you've saved, applied to and hidden, with follow-up
+reminders; the **apply kit** holds your standard form answers (name, links, work authorization, …)
+with a Copy button each. Both live only in your browser. Tests: `.venv/bin/python -m unittest tests/test_jobprep.py`
+(Claude is stubbed, so they're free).

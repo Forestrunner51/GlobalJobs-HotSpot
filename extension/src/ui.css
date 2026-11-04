@@ -1,0 +1,53 @@
+/* Shared styles for the popup and the profile page. Follows the system light/dark setting. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --panel: #f5f7fa;
+  --line: #d9dee6;
+  --text: #17202b;
+  --muted: #5d6877;
+  --accent: #1f6feb;
+  --accent-ink: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --error: #cf222e;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141b;
+    --panel: #18202b;
+    --line: #2a3442;
+    --text: #e6ebf2;
+    --muted: #9aa6b5;
+    --accent: #7cc4ff;
+    --accent-ink: #06243a;
+    --ok: #7ad19a;
+    --warn: #f2c14e;
+    --error: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+h1 { font-size: 1.05rem; margin: 0; }
+h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; }
+p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85rem; }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.error { color: var(--error); }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 7px 12px; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.linklike { background: none; border: 0; padding: 0; color: var(--accent); }
+.linklike:hover { text-decoration: underline; }
+input[type="text"], input[type="email"], input[type="tel"], input[type="url"], input[type="month"], select, textarea {
+  width: 100%; padding: 7px 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+}
+textarea { resize: vertical; }

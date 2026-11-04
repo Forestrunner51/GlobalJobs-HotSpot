@@ -36,19 +36,23 @@ export async function loadCore() {
   };
 }
 
-// Job postings come from jobs/fetch_jobs.py. The full text is a separate, larger file,
-// fetched only when someone reads or copies a posting.
+// Job postings come from jobs/fetch_jobs.py. Full text is split into jobs-text/NN.json files,
+// fetched one at a time when someone reads or copies a posting.
 let jobsPromise;
-let jobTextPromise;
+const jobTextShards = new Map();
 
 export function loadJobs() {
   jobsPromise ??= getJSON('jobs.json').catch((err) => { jobsPromise = null; throw err; });
   return jobsPromise;
 }
 
-export function loadJobText() {
-  jobTextPromise ??= getJSON('jobs-text.json').catch((err) => { jobTextPromise = null; throw err; });
-  return jobTextPromise;
+export function loadJobText(shard) {
+  if (!jobTextShards.has(shard)) {
+    const p = getJSON(`jobs-text/${shard}.json`);
+    p.catch(() => jobTextShards.delete(shard)); // allow retry after a failed fetch
+    jobTextShards.set(shard, p);
+  }
+  return jobTextShards.get(shard);
 }
 
 function chunk(core, key, path) {

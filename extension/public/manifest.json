@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Job Application Autofill",
+  "short_name": "Autofill",
+  "version": "0.4.0",
+  "description": "Fills job applications on Greenhouse, Lever and Workday from your saved profile when you click Fill, and keeps a history of the jobs you applied to. It never submits anything.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "activeTab",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.greenhouse.io/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.myworkdaysite.com/*",
+    "https://*.myworkday.com/*",
+    "https://jobs.lever.co/*",
+    "https://jobs.eu.lever.co/*"
+  ],
+  "optional_permissions": [
+    "downloads"
+  ],
+  "action": {
+    "default_title": "Job Application Autofill",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.greenhouse.io/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.myworkdaysite.com/*",
+        "https://*.myworkday.com/*",
+        "https://jobs.lever.co/*",
+        "https://jobs.eu.lever.co/*"
+      ],
+      "js": [
+        "content/fill.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://forestrunner51.github.io/GlobalJobs-HotSpot/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content/site.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "job-autofill@local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

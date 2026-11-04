@@ -6,6 +6,7 @@ on:
     paths: ["web/**", "jobs/**", ".github/workflows/pages.yml"]
   schedule:
     - cron: "0 12 * * *" # daily at 12:00 UTC, to refresh job postings (runs from the default branch)
+    - cron: "0 0 * * *"  # and 00:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -26,8 +27,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - id: pages
+        uses: actions/configure-pages@v5
+      # Job data isn't committed. Start from the live site's copy so the fetcher can tell which
+      # postings are new and which closed, and keep postings from any source that fails this run.
+      - name: Download current job postings
+        continue-on-error: true
+        run: |
+          base="${{ steps.pages.outputs.base_url }}/data"
+          curl -fsSL "$base/jobs.json" -o web/data/jobs.json
+          mkdir -p web/data/jobs-text
+          for i in $(seq -w 0 31); do curl -fsSL "$base/jobs-text/$i.json" -o "web/data/jobs-text/$i.json" || true; done
       # Standard library only, so no install step. If every source fails, the script exits
-      # non-zero and leaves the committed jobs.json in place; the site still deploys.
+      # non-zero and leaves the downloaded jobs.json in place; the site still deploys.
       - name: Fetch job postings
         continue-on-error: true
         env:

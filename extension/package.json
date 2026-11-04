@@ -1,0 +1,25 @@
+{
+  "name": "job-application-autofill",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Fills job application forms from your saved profile when you click Fill. Never submits.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && CONTENT=fill vite build -c vite.content.config.ts && CONTENT=site vite build -c vite.content.config.ts",
+    "watch": "CONTENT=fill vite build -c vite.content.config.ts --watch & CONTENT=site vite build -c vite.content.config.ts --watch & vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.4",
+    "happy-dom": "20.14.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.1",
+    "vitest": "5.0.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.135.0",
+    "pdfjs-dist": "6.4.299",
+    "zod": "4.6.7"
+  }
+}
