@@ -51,23 +51,36 @@ export const relevantLangs = (job, langs = []) => (langs.length ? langs.filter((
 const focusedOn = (job, k) => job.inTitle.includes(k) || (job.mentions[k] ?? 0) >= 2;
 export const isFocused = (job, langs = []) => relevantLangs(job, langs).some((k) => focusedOn(job, k));
 
+/** Picked keywords split by filter row: [[...languages], [...frameworks], ...]. groupOf maps name -> row id. */
+export function langsByGroup(langs, groupOf = {}) {
+  const rows = new Map();
+  for (const k of langs) {
+    const g = groupOf[k] ?? 'language';
+    rows.set(g, [...(rows.get(g) ?? []), k]);
+  }
+  return [...rows.values()];
+}
+
 /**
+ * langs: a posting must mention one pick from each filter row (Java or Go, and React).
  * levels: empty means any level. maxYears: postings asking for more are dropped; postings that
  * don't state years stay unless yearsKnown is set.
  */
 export function filterJobs(jobs, {
   q = '', where = 'all', focus = false, metro = null, levels = [], maxYears = null, yearsKnown = false,
-  usState = null, langs = [], work = 'any', fresh = false, meta = {},
+  usState = null, langs = [], groupOf = {}, work = 'any', fresh = false, meta = {}, pay = false,
 } = {}) {
   const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = langsByGroup(langs, groupOf);
   return jobs.filter((j) => {
-    if (langs.length && !langs.some((k) => j.keywords.includes(k))) return false;
+    if (!rows.every((row) => row.some((k) => j.keywords.includes(k)))) return false;
     if (levels.length && !levels.includes(j.level)) return false;
     if (yearsKnown && j.years == null) return false;
     if (maxYears != null && j.years != null && j.years > maxYears) return false;
     if (where === 'us' && !(j.us || j.regionIds.length)) return false;
     if (!workMatches(j, work)) return false;
     if (fresh && !isNew(j, meta)) return false;
+    if (pay && !j.salary) return false;
     if (focus && !isFocused(j, langs)) return false;
     if (usState && !(j.states ?? []).includes(usState)) return false;
     if (metro && !j.regionIds.includes(metro)) return false;
@@ -140,24 +153,40 @@ export function strengthTags(job, langs = [], max = 3) {
 
 /** The snippet around the most central picked language that has one. */
 export function jobSnippet(job, langs = []) {
-  const k = byCentrality(job, langs).find((w) => job.snippets?.[w]);
+  // A role picked from the title has no mention in the text to quote, so fall back to any snippet.
+  const k = byCentrality(job, langs).find((w) => job.snippets?.[w]) ?? Object.keys(job.snippets ?? {})[0];
   return k ? { lang: k, text: job.snippets[k] } : null;
 }
 
-/** Postings about the picked languages first, then the newest. */
-export function sortJobs(jobs, langs = []) {
-  const score = (j) => {
+export const SORTS = [['relevance', 'Most relevant'], ['new', 'Newest'], ['match', 'Best for my resume']];
+
+const newestFirst = (a, b) => (a < b ? 1 : a > b ? -1 : 0);
+
+/**
+ * by 'relevance': postings about the picked languages first, then the newest.
+ * by 'new': newest first. by 'match': `matchOf(job)` percent (see profile.js), then the newest.
+ */
+export function sortJobs(jobs, langs = [], { by = 'relevance', matchOf = null } = {}) {
+  const relevance = (j) => {
     const ks = relevantLangs(j, langs);
     return 10 * ks.filter((k) => j.inTitle.includes(k)).length + Math.min(3, ks.reduce((n, k) => n + (j.mentions[k] ?? 0), 0));
   };
+  const score = by === 'new' ? () => 0
+    : by === 'match' && matchOf ? (j) => { const m = matchOf(j); return m ? m.percent * 100 + Math.min(99, m.weight) : -1; }
+      : relevance;
   return jobs.map((j) => [score(j), j.posted ?? '', j])
-    .sort((a, b) => b[0] - a[0] || (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
+    .sort((a, b) => b[0] - a[0] || newestFirst(a[1], b[1]))
     .map(([, , j]) => j);
 }
 
-/** [name, count] for each language: how many postings that language alone would show under `filters`. */
+/**
+ * [name, count] for each keyword: how many postings it would show in place of the other picks in
+ * its row, keeping the picks in other rows (so with Java picked, React counts Java + React postings).
+ */
 export function langCounts(jobs, names, filters = {}) {
-  return names.map((n) => [n, filterJobs(jobs, { ...filters, langs: [n] }).length]);
+  const { langs = [], groupOf = {} } = filters;
+  const row = (k) => groupOf[k] ?? 'language';
+  return names.map((n) => [n, filterJobs(jobs, { ...filters, langs: [...langs.filter((k) => row(k) !== row(n)), n] }).length]);
 }
 
 /** Which jobs-text/NN.json holds a posting: FNV-1a of the id, as text_shard() in fetch_jobs.py. */

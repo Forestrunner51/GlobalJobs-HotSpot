@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <!--
     Privacy guarantee enforced by policy: scripts, workers and fetches may only
     reach this site's own origin, which is static hosting with no endpoint that
@@ -12,7 +12,10 @@
   <meta name="referrer" content="no-referrer">
   <title>Career Hotspot Globe</title>
   <meta name="description" content="See where US occupations are concentrated, by metro area, and browse live job postings by keyword. Upload a resume to find matching occupations. The resume is read only in your browser.">
-  <link rel="icon" href="data:,">
+  <meta name="theme-color" content="#faf5e8">
+  <link rel="icon" href="img/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="img/icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="css/app.css">
   <script type="module" src="js/main.js"></script>
 </head>
@@ -38,8 +41,22 @@
   <div id="fatal" class="fatal" hidden></div>
 
   <main class="layout">
-    <aside class="panel sidebar" aria-label="Filters">
+    <aside class="panel sidebar" id="sidebar" aria-label="Filters">
+      <div class="drawer-head">
+        <strong id="drawer-title">Filters</strong>
+        <button type="button" class="icon-btn" id="drawer-close" aria-label="Close">×</button>
+      </div>
       <div id="jobs-side" hidden>
+        <section id="resume-match">
+          <h2>Match my resume</h2>
+          <div id="resume-match-body"></div>
+          <label class="drop compact" id="jobs-drop">
+            <input id="jobs-resume-file" type="file" accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <span class="drop-main" id="jobs-drop-main">Add your resume</span>
+            <span class="drop-sub">PDF, DOCX or TXT. Read on this device, never uploaded.</span>
+          </label>
+          <div id="resume-match-status" class="status" role="status" aria-live="polite"></div>
+        </section>
         <section id="my-apps">
           <h2>My applications</h2>
           <div id="mine-views" class="segmented four" role="radiogroup" aria-label="Which postings"></div>
@@ -47,27 +64,38 @@
           <label class="check"><input type="checkbox" id="hide-done"> Hide postings I applied to or hid</label>
           <div class="mine-actions">
             <button type="button" class="ghost small" id="kit-open">Apply kit</button>
-            <button type="button" class="ghost small" id="batch-download">Download saved for prep</button>
+            <button type="button" class="ghost small desk-only" id="batch-download">Download saved for prep</button>
             <button type="button" class="ghost small" id="autofill-queue" hidden>Apply to saved with Autofill</button>
             <button type="button" class="ghost small" id="autofill-history" hidden>Application history</button>
           </div>
           <p id="mine-msg" class="status" role="status"></p>
           <details class="mine-more">
-            <summary>Export, back up, restore</summary>
+            <summary>Move to my phone or laptop, export, back up</summary>
+            <div class="mine-actions">
+              <button type="button" class="ghost small" id="transfer-make">Send my list to another device</button>
+            </div>
+            <div id="transfer-box" class="transfer-box" hidden>
+              <p class="hint">Open this link on the other device. It carries your saved postings and apply-kit answers inside the link itself (nothing is uploaded), so send it only to yourself.</p>
+              <input id="transfer-link" class="text-input" type="text" readonly aria-label="Transfer link">
+              <div class="mine-actions">
+                <button type="button" class="btn-primary small" id="transfer-share" hidden>Share…</button>
+                <button type="button" class="ghost small" id="transfer-copy">Copy link</button>
+              </div>
+            </div>
             <div class="mine-actions">
               <button type="button" class="linklike small" id="export-csv">Export CSV</button>
-              <button type="button" class="linklike small" id="backup">Back up</button>
-              <label class="linklike small file-pick">Restore<input type="file" id="restore" accept="application/json,.json" hidden></label>
+              <button type="button" class="linklike small" id="backup">Back up to a file</button>
+              <label class="linklike small file-pick">Restore from a file<input type="file" id="restore" accept="application/json,.json" hidden></label>
             </div>
           </details>
-          <p class="hint">Saved only in this browser. Back up to move it to another one.</p>
+          <p class="hint">Saved only in this browser. Use the link above to carry it to your phone or laptop.</p>
         </section>
         <section>
           <h2>Job postings</h2>
-          <div id="job-langs" class="examples lang-filter" role="group" aria-label="Languages"></div>
-          <p class="hint">Pick one or more languages. With none picked, every posting shows.</p>
+          <div id="job-langs" class="examples lang-filter"></div>
+          <p class="hint">Pick any in a row to match any of them; picks in different rows must all match (Java and Spring Boot, or Platform and AWS). Roles match the job title. With none picked, every posting shows.</p>
           <label for="job-q" class="sr-only">Filter postings</label>
-          <input id="job-q" class="text-input" type="search" placeholder="Filter by title, company or city" autocomplete="off">
+          <input id="job-q" class="text-input" type="search" placeholder="Filter by title, company or city" autocomplete="off" enterkeyhint="search">
           <div class="segmented spaced" role="radiogroup" aria-label="Location">
             <label><input type="radio" name="where" value="all" checked><span>Anywhere</span></label>
             <label><input type="radio" name="where" value="us"><span>US only</span></label>
@@ -81,6 +109,7 @@
             <select id="job-city"><option value="">All cities</option></select>
           </div>
           <label class="check"><input type="checkbox" id="job-fresh"> <span id="job-fresh-label">New in the last 7 days</span></label>
+          <label class="check"><input type="checkbox" id="job-pay"> Only postings that list pay</label>
           <label class="check"><input type="checkbox" id="job-focus"> <span id="job-focus-label">Focused postings only</span></label>
           <p class="hint">Focused means the language is in the title or mentioned at least twice, not just listed once among others.</p>
           <p id="jobs-count" class="hint" aria-live="polite"></p>
@@ -99,10 +128,11 @@
         <section>
           <h2>Apply quickly</h2>
           <ol class="steps">
-            <li><strong>☆ Save</strong> the postings you want (or press <kbd>s</kbd>).</li>
-            <li><strong>Download saved for prep</strong>, then in Terminal:<br><code class="cmd">.venv/bin/python apply/jobprep.py batch ~/Downloads/prep-batch-….json</code><br>Each gets a memo PDF, an email, and <code>answers.txt</code> with "why this company" and a cover note. It asks before using the API.</li>
-            <li>Press <strong>Apply</strong>. The employer's form opens in a new tab and your <strong>apply kit</strong> appears here with Copy buttons. Fill in the form, attach the memo, submit it yourself, then <strong>Mark as applied</strong>.</li>
+            <li><strong>Add your resume</strong> above. It's read on this device: it fills your apply kit and shows how well each posting fits.</li>
+            <li><strong>☆ Save</strong> the postings you want<span class="desk-only"> (or press <kbd>s</kbd>)</span>.</li>
+            <li>Press <strong>Apply</strong>. The employer's form opens in a new tab and your <strong>apply kit</strong> waits here with a Copy button per answer. Submit the form yourself; when you come back, say whether you applied.</li>
             <li>Follow-ups come due 6 days later under <strong>My applications</strong>.</li>
+            <li class="desk-only">Optional, on a computer: <strong>Download saved for prep</strong>, then in Terminal:<br><code class="cmd">.venv/bin/python apply/jobprep.py batch ~/Downloads/prep-batch-….json</code><br>Each posting gets a memo PDF, an email, and <code>answers.txt</code> with "why this company" and a cover note. It asks before using the API.</li>
           </ol>
         </section>
         <section>
@@ -116,7 +146,7 @@
         <h2>Occupations</h2>
         <div class="search">
           <label for="occ-search" class="sr-only">Search occupations</label>
-          <input id="occ-search" type="search" placeholder="Search, e.g. nurse, data scientist, rust" autocomplete="off"
+          <input id="occ-search" type="search" placeholder="Search, e.g. nurse, data scientist, rust" autocomplete="off" enterkeyhint="search"
                  role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="occ-results">
           <ul id="occ-results" class="results" role="listbox" hidden></ul>
         </div>
@@ -135,7 +165,7 @@
           <span class="drop-main">Choose a file or drop it here</span>
           <span class="drop-sub">PDF, DOCX or TXT</span>
         </label>
-        <p class="privacy"><strong>Your resume stays on this device.</strong> It is read in this browser tab and never uploaded. This site has no server to receive it, and its security policy blocks sending data to any other site.</p>
+        <p class="privacy"><strong>Your resume stays on this device.</strong> It is read in this browser tab and never uploaded. This site has no server to receive it, and its security policy blocks sending data to any other site. If you then open Job postings, the skills it mentions and your contact details are remembered in this browser to score postings and fill your apply kit; "Forget resume" there removes them.</p>
         <div id="resume-status" class="status" role="status" aria-live="polite"></div>
         <ol id="suggestions" class="suggestions" aria-label="Suggested occupations"></ol>
       </section>
@@ -151,6 +181,9 @@
           <input id="floor" type="number" min="0" step="10" value="50" inputmode="numeric">
         </label>
       </section>
+      </div>
+      <div class="drawer-foot">
+        <button type="button" class="btn-primary" id="drawer-done">Show results</button>
       </div>
     </aside>
 
@@ -168,6 +201,7 @@
         <div id="empty" class="empty">
           <p><strong>Pick an occupation</strong> to see where it's concentrated, or upload a resume.</p>
           <div id="examples" class="examples"></div>
+          <button type="button" class="btn-primary phone-only" id="empty-open">Search or add a resume</button>
         </div>
         <div id="legend" class="legend" hidden></div>
         <div id="loading" class="loading" hidden>Loading…</div>
@@ -179,9 +213,16 @@
       <div class="table-wrap" id="jobs-wrap" hidden>
         <div class="jobs-head">
           <h2 id="jobs-title">Postings</h2>
-          <button type="button" id="jobs-clear-metro" class="ghost small" hidden>Show all locations</button>
+          <div class="jobs-tools">
+            <button type="button" id="jobs-clear-metro" class="ghost small" hidden>Show all locations</button>
+            <button type="button" id="jobs-clear" class="ghost small" hidden>Clear filters</button>
+            <label class="sort-pick"><span class="sr-only">Sort postings</span>
+              <select id="job-sort"></select>
+            </label>
+          </div>
         </div>
-        <p class="keys-hint">Keys: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>s</kbd> save · <kbd>a</kbd> apply · <kbd>p</kbd> copy for prep · <kbd>r</kbd> read · <kbd>h</kbd> hide · <kbd>Esc</kbd> close kit</p>
+        <div id="quick-roles" class="quick-row" role="group" aria-label="Quick searches for cloud and infrastructure roles" hidden></div>
+        <p class="keys-hint desk-only">Keys: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>s</kbd> save · <kbd>a</kbd> apply · <kbd>p</kbd> copy for prep · <kbd>r</kbd> read · <kbd>h</kbd> hide · <kbd>Esc</kbd> close kit</p>
         <div id="jobs-list" class="jobs-list"></div>
       </div>
     </section>
@@ -191,6 +232,17 @@
 
   <aside id="apply-kit" class="kit" aria-label="Apply kit" hidden></aside>
 
+  <nav class="mobile-bar" aria-label="Quick actions">
+    <button type="button" id="mb-filters">Filters</button>
+    <button type="button" id="mb-saved" aria-pressed="false">★ Saved</button>
+    <button type="button" id="mb-map" aria-pressed="false">Map</button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+    <span id="toast-text"></span>
+    <button type="button" id="toast-action" class="linklike" hidden></button>
+  </div>
+
   <dialog id="kit-editor" aria-labelledby="kit-editor-title">
     <form method="dialog" id="kit-form">
       <div class="dialog-head">
@@ -198,6 +250,7 @@
         <button type="button" class="icon-btn" id="kit-cancel" aria-label="Close">×</button>
       </div>
       <p class="hint">Answers application forms ask for every time. When you press Apply on a posting, these appear with a Copy button each, so you can fill the employer's form fast. You still fill it in and submit it yourself. Stored only in this browser.</p>
+      <p id="kit-from-resume" class="status ok" hidden></p>
       <div id="kit-fields" class="kit-fields"></div>
       <label class="kit-extra">Other saved answers
         <textarea id="kit-extra" rows="6" placeholder="Anything else you paste often: a short bio, a project summary, an answer about remote work. Separate answers with a blank line; each gets its own Copy button."></textarea>
@@ -226,9 +279,9 @@
     <h3>Coverage</h3>
     <p>US metropolitan statistical areas only. Rural and nonmetro areas, and all countries outside the US, are not included yet.</p>
     <h3>Job postings</h3>
-    <p>The postings tab lists live openings that mention the programming languages in <code>jobs/sources.json</code> (Rust, C++, Go, Python and others). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. A posting can appear because it lists a language once among several; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Hybrid comes from the location field or phrases like "3 days a week in the office"; On-site means a posting names a place and mentions neither, so some of those are really hybrid. Postings refresh automatically: closed roles drop out of company boards, and feed postings older than 60 days are removed. Applying always happens on the employer's own site.</p>
+    <p>The postings tab lists live openings that mention the programming languages in <code>jobs/sources.json</code> (Rust, C++, Go, Python and others). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. Cloud and infrastructure roles (Cloud / AWS, Platform, Infrastructure, SRE, DevOps) are found by job title, whatever languages the posting lists, and have one-tap Quick search buttons above the list. Frameworks and cloud tools (React, Spring Boot, AWS, ...) are tags on those postings, matched in the same text; a posting that mentions only a framework isn't included. A posting can appear because it lists a language once among several; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Hybrid comes from the location field or phrases like "3 days a week in the office"; On-site means a posting names a place and mentions neither, so some of those are really hybrid. Postings refresh automatically: closed roles drop out of company boards, and feed postings older than 60 days are removed. Pay ranges come from the board when it provides one, otherwise from the first annual range written in the posting. Applying always happens on the employer's own site.</p>
     <h3>Applying</h3>
-    <p>Nothing on this site applies for you. Save postings, prepare tailored materials with <code>apply/jobprep.py</code>, then fill in and submit each application yourself on the employer's site. The apply kit only puts your own saved answers on the clipboard. Your saved postings, statuses and apply kit stay in this browser's storage and are never sent anywhere.</p>
+    <p>Nothing on this site applies for you. Save postings, prepare tailored materials with <code>apply/jobprep.py</code>, then fill in and submit each application yourself on the employer's site. The apply kit only puts your own saved answers on the clipboard. Your saved postings, statuses and apply kit stay in this browser's storage and are never sent anywhere. Adding a resume on the postings tab reads it on your device and keeps only the list of skills it mentions and your contact details, in this browser; the resume itself isn't stored. "Send my list to another device" puts your list inside a link (after the #, which browsers don't send to any server); whoever opens that link gets the list, so send it only to yourself.</p>
     <h3>Sources</h3>
     <ul id="about-sources"></ul>
   </dialog>

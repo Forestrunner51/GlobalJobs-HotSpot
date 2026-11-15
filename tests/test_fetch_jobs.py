@@ -51,6 +51,33 @@ class Keywords(unittest.TestCase):
         self.assertEqual(hit["inTitle"], ["Rust", "C++"])
         self.assertEqual(hit["mentions"], {"Rust": 1, "C++": 1})
 
+    def test_frameworks_tag_but_never_qualify_alone(self):
+        rx = {"Java": RX["Java"], "Spring Boot": RX["Spring Boot"], "AWS": RX["AWS"]}
+        tags = frozenset({"Spring Boot", "AWS"})
+        self.assertIsNone(fj.match_keywords("AWS Partner Sales Manager", "Sell AWS and Spring Boot support.", rx, tags))
+        hit = fj.match_keywords("Backend Engineer", "Java and Spring Boot services on AWS. More AWS.", rx, tags)
+        self.assertEqual(hit["keywords"], ["Java", "Spring Boot", "AWS"])
+        self.assertEqual(list(hit["snippets"])[0], "Java")  # languages keep their snippet ahead of tags
+        self.assertIsNotNone(fj.match_keywords("AWS Engineer", "AWS", {"AWS": RX["AWS"]}))  # untagged: qualifies
+
+    def test_framework_patterns(self):
+        for name, yes, no in [
+            ("React", ["React", "React.js", "ReactJS", "React Native"], ["react quickly", "Reactive streams"]),
+            ("Node.js", ["Node.js", "NodeJS"], ["a Kubernetes node", "Node"]),
+            ("Spring Boot", ["Spring Boot", "SpringBoot", "Spring Framework"], ["Spring 2027 internship"]),
+            ("AWS", ["AWS Lambda", "Amazon Web Services"], ["laws and draws"]),
+            ("Kubernetes", ["Kubernetes", "k8s"], ["k8"]),
+            ("Spark", ["Apache Spark", "PySpark", "Spark SQL", "Python, Spark"], ["spark joy", "Spark Driver app"]),
+        ]:
+            for text in yes:
+                self.assertTrue(mentions(name, text), (name, text))
+            for text in no:
+                self.assertFalse(mentions(name, text), (name, text))
+
+    def test_every_keyword_group_exists(self):
+        groups = {g["id"] for g in fj.keyword_groups(CONFIG)}
+        self.assertEqual({s["group"] for s in SPECS.values()} - groups, set())
+
     def test_go_only_as_a_language(self):
         for text in ("Experience with Go, Rust or C++", "services written in Go.", "Golang experience",
                      "Go/Python", "Go and Kotlin", "strong Go engineers"):
@@ -104,6 +131,134 @@ class Experience(unittest.TestCase):
         }
         for text, years in cases.items():
             self.assertEqual(fj.required_years(text), years, text)
+
+
+class Roles(unittest.TestCase):
+    """Cloud and infrastructure roles are matched on the job title only."""
+    groups = fj.keyword_groups(CONFIG)
+    roles = fj.TitleRules(list(SPECS.values()), groups)
+
+    def found(self, title, text="We run infrastructure on a cloud platform with DevOps practices."):
+        hit = fj.match_keywords(title, text, RX, frozenset(), self.roles)
+        return [k for k in (hit or {}).get("keywords", []) if SPECS[k]["group"] == "role"]
+
+    def test_titles(self):
+        for title, want in [
+            ("Senior Platform Engineer", ["Platform"]),
+            ("Software Engineer, Platform", ["Platform"]),
+            ("Staff Engineer - Developer Platform", ["Platform"]),
+            ("Cloud Infrastructure Engineer", ["Cloud / AWS", "Infrastructure"]),
+            ("AWS Cloud Architect", ["Cloud / AWS"]),
+            ("Infra Engineer", ["Infrastructure"]),
+            ("Site Reliability Engineer II", ["SRE"]),
+            ("SRE Manager", ["SRE"]),
+            ("DevOps Engineer", ["DevOps"]),
+            ("Dev Ops Lead", ["DevOps"]),
+        ]:
+            self.assertEqual(self.found(title), want, title)
+
+    def test_not_roles(self):
+        # The text mentions all of them; only the title counts.
+        for title in ("Backend Engineer", "Cloud Account Executive", "Sales Engineer, Cloud", "Product Manager, Platform",
+                      "Platform Marketing Lead", "Infrastructure Recruiter", "Head of Cloud Partnerships",
+                      "Global Head of Cloud Alliances", "Director of Product Design - Developer Platform"):
+            self.assertEqual(self.found(title), [], title)
+
+    def test_title_only_posting_gets_an_opening_snippet(self):
+        hit = fj.match_keywords("Platform Engineer", "Join the team that runs our clusters. " * 10,
+                                {"Platform": RX["Platform"]}, frozenset(), self.roles)
+        self.assertEqual(hit["inTitle"], ["Platform"])
+        self.assertEqual(hit["mentions"], {"Platform": 0})
+        self.assertTrue(hit["snippets"]["Platform"].startswith("Join the team"))
+        self.assertTrue(hit["snippets"]["Platform"].endswith("…"))
+
+    def test_role_patterns_work_in_javascript_too(self):
+        # The site compiles the same patterns for highlighting: no lookbehind of variable width, no inline flags.
+        for name, spec in SPECS.items():
+            if spec["group"] == "role":
+                self.assertNotRegex(spec["pattern"], r"\(\?[aiLmsux]|\(\?<[=!][^)]*[*+]", name)
+
+
+class RateLimit(unittest.TestCase):
+    def test_himalayas_waits_once_then_stops_and_reports(self):
+        import urllib.error
+        real_get, real_wait = fj.get_json, fj.RATE_LIMIT_WAIT
+        calls = []
+
+        def fake(url, headers=None, timeout=60):
+            calls.append(url)
+            if "q=rust" in url:
+                return {"totalCount": 1, "jobs": [{"title": "Rust dev", "guid": "https://h/1", "companyName": "Acme",
+                                                   "description": "Rust", "pubDate": 1792000000}]}
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+        fj.get_json, fj.RATE_LIMIT_WAIT = fake, 0
+        fj.CUT_SHORT.clear()
+        try:
+            jobs = fj.from_himalayas([("Rust", "rust"), ("Go", "golang"), ("Python", "python")],
+                                     {"pages": 3, "secondsBetweenCalls": 0})
+        finally:
+            fj.get_json, fj.RATE_LIMIT_WAIT = real_get, real_wait
+        self.assertEqual(len(jobs), 1)  # what it had before the limit
+        self.assertEqual(len(calls), 3)  # rust, golang, golang again after waiting; python never asked
+        self.assertIn("himalayas", fj.CUT_SHORT)
+        fj.CUT_SHORT.clear()
+
+    def test_cut_short_source_keeps_last_runs_postings(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out, cfg = Path(tmp) / "out", Path(tmp) / "sources.json"
+            out.mkdir()
+            old = {"source": "himalayas", "company": "Acme", "location": "Remote (US)", "regionIds": [], "states": [],
+                   "keywords": ["Rust"], "inTitle": ["Rust"], "mentions": {"Rust": 1}, "snippets": {}, "firstSeen": "2026-10-02"}
+            (out / "jobs.json").write_text(json.dumps({"generated": "2026-10-18T12:00:00+00:00", "jobs": [
+                {**old, "id": "hm-seen-again", "title": "Rust Engineer"}, {**old, "id": "hm-not-reached", "title": "Rust SRE"}]}))
+            cfg.write_text(json.dumps({"keywords": ["Rust"], "hackerNews": False, "usajobs": False,
+                                       "himalayas": {"pages": 1, "secondsBetweenCalls": 0}}))
+            real_h, argv = fj.from_himalayas, sys.argv
+
+            def partial(*a, **k):
+                fj.CUT_SHORT.add("himalayas")
+                return [{"id": "hm-seen-again", "company": "Acme", "title": "Rust Engineer", "location": "Remote (US)",
+                         "remote": True, "url": "https://h/1", "text": "Rust"}]
+            fj.from_himalayas = partial
+            sys.argv = ["fetch_jobs.py", "--config", str(cfg), "--out", str(out)]
+            try:
+                self.assertEqual(fj.main(), 0)
+            finally:
+                fj.from_himalayas, sys.argv = real_h, argv
+                fj.CUT_SHORT.clear()
+            data = json.loads((out / "jobs.json").read_text())
+            self.assertEqual(sorted(j["id"] for j in data["jobs"]), ["hm-not-reached", "hm-seen-again"])
+            self.assertEqual(data["changes"]["closed"], 0)
+            self.assertIn("rate limited", data["sources"][0]["problems"][0])
+
+
+class Pay(unittest.TestCase):
+    def test_ranges(self):
+        pay = fj.salary_from_text
+        self.assertEqual(pay("The base salary range is $150,000 - $200,000 per year."), "$150k–$200k")
+        self.assertEqual(pay("Pay: $120K–$165K plus equity"), "$120k–$165k")
+        self.assertEqual(pay("USD 135,000 to 180,500 annually"), "$135k–$180k")
+        self.assertEqual(pay("$142,500.00 — $190,000.00 USD"), "$142k–$190k")
+        self.assertEqual(pay("between $95,000 and $130,000"), "$95k–$130k")
+        self.assertEqual(pay("$150,000 - $150,000"), "$150k")
+
+    def test_not_pay(self):
+        pay = fj.salary_from_text
+        self.assertIsNone(pay("We raised $50,000,000 - $60,000,000 in funding"))
+        self.assertIsNone(pay("a $10,000 - $20,000 sign-on bonus"))
+        self.assertIsNone(pay("$45 - $60 per hour"))
+        self.assertIsNone(pay("Serving 150,000 to 200,000 customers"))
+        self.assertIsNone(pay("No numbers here"))
+        # A bonus range before the real one is skipped, not returned.
+        self.assertEqual(pay("Bonus of $5,000 - $9,000. Salary $110,000 - $140,000."), "$110k–$140k")
+
+    def test_dedupe_by_id_and_by_posting(self):
+        jobs = [{"id": "a", "company": "Acme", "title": "Engineer", "location": "NYC"},
+                {"id": "a", "company": "Acme", "title": "Engineer (updated)", "location": "NYC"},
+                {"id": "b", "company": "acme ", "title": "engineer", "location": "nyc"},
+                {"id": "c", "company": "Acme", "title": "Engineer", "location": "Austin"}]
+        self.assertEqual([j["id"] for j in fj.dedupe(jobs)], ["a", "c"])
 
 
 class Locations(unittest.TestCase):

@@ -10,19 +10,21 @@ export const FOLLOW_UP_DAYS = 6; // same as FOLLOW_UP_DAYS in apply/jobprep.py
 export const VIEWS = ['saved', 'applied', 'hidden'];
 
 // Answers most application forms ask for. Filled once, copied into each form by hand.
+// [key, label, placeholder, input attributes]: the attributes give phones the right keyboard and
+// let the browser offer your own saved details.
 export const KIT_FIELDS = [
-  ['name', 'Full name', ''],
-  ['email', 'Email', ''],
-  ['phone', 'Phone', ''],
-  ['location', 'Location', 'City, State'],
-  ['linkedin', 'LinkedIn URL', 'https://www.linkedin.com/in/…'],
-  ['github', 'GitHub URL', 'https://github.com/…'],
-  ['portfolio', 'Portfolio or website', ''],
-  ['workAuth', 'Work authorization', 'Authorized to work in the US'],
-  ['sponsorship', 'Needs visa sponsorship?', 'No'],
-  ['salary', 'Salary expectation', ''],
-  ['start', 'Start date or notice period', 'Two weeks'],
-  ['heard', 'How did you hear about us?', 'Company careers page'],
+  ['name', 'Full name', '', 'autocomplete="name" autocapitalize="words"'],
+  ['email', 'Email', '', 'type="email" inputmode="email" autocomplete="email" autocapitalize="none"'],
+  ['phone', 'Phone', '', 'type="tel" inputmode="tel" autocomplete="tel"'],
+  ['location', 'Location', 'City, State', 'autocomplete="off" autocapitalize="words"'],
+  ['linkedin', 'LinkedIn URL', 'https://www.linkedin.com/in/…', 'inputmode="url" autocomplete="off" autocapitalize="none"'],
+  ['github', 'GitHub URL', 'https://github.com/…', 'inputmode="url" autocomplete="off" autocapitalize="none"'],
+  ['portfolio', 'Portfolio or website', '', 'inputmode="url" autocomplete="off" autocapitalize="none"'],
+  ['workAuth', 'Work authorization', 'Authorized to work in the US', 'autocomplete="off"'],
+  ['sponsorship', 'Needs visa sponsorship?', 'No', 'autocomplete="off"'],
+  ['salary', 'Salary expectation', '', 'autocomplete="off"'],
+  ['start', 'Start date or notice period', 'Two weeks', 'autocomplete="off"'],
+  ['heard', 'How did you hear about us?', 'Company careers page', 'autocomplete="off"'],
 ];
 
 function load(key, fallback) {
@@ -146,6 +148,82 @@ export function parseBackup(text) {
 export const exportBackup = (entries, kit, today = isoToday()) => ({
   format: 'jobglobal-tracker-backup', version: 1, created: today, entries, kit,
 });
+
+/** The whole kit as text, one answer per block, to paste into a notes app or a message to yourself. */
+export const kitAsText = (kit) => kitItems(kit).map(([label, value]) => `${label}: ${value}`).join('\n');
+
+// ---------------------------------------------------------------------------
+// Moving your list to another device (phone <-> laptop) without a server: the backup, compressed,
+// rides in the link's #fragment, which browsers never send to the site.
+
+export const TRANSFER_PARAM = 'transfer';
+export const TRANSFER_MAX = 60_000; // characters; longer links get cut by messaging apps
+
+const toB64Url = (bytes) => {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+const fromB64Url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+
+async function pipe(bytes, stream) {
+  const body = new Blob([bytes]).stream().pipeThrough(stream);
+  return new Uint8Array(await new Response(body).arrayBuffer());
+}
+
+/** "z.<base64url>" (deflated) or "j.<base64url>" where the browser can't compress. */
+export async function encodeTransfer(entries, kit) {
+  const bytes = new TextEncoder().encode(JSON.stringify(exportBackup(entries, kit)));
+  if (typeof CompressionStream === 'function') {
+    try {
+      return `z.${toB64Url(await pipe(bytes, new CompressionStream('deflate-raw')))}`;
+    } catch { /* fall through to uncompressed */ }
+  }
+  return `j.${toB64Url(bytes)}`;
+}
+
+/** The {entries, kit} in a transfer code, or null if it isn't one (truncated link, other site). */
+export async function decodeTransfer(code) {
+  try {
+    const [kind, data] = [code.slice(0, 2), code.slice(2)];
+    let bytes = fromB64Url(data);
+    if (kind === 'z.') bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
+    else if (kind !== 'j.') return null;
+    return parseBackup(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+const validEntry = (e) => e && typeof e === 'object' && VIEWS.includes(e.status) && e.job && typeof e.job === 'object';
+
+/**
+ * Combine another device's list with this one. For a posting on both, the more recently changed
+ * entry wins; a tie keeps this device's. Returns the merged entries and how many were added or changed.
+ */
+export function mergeEntries(mine, theirs) {
+  const next = { ...mine };
+  let changed = 0;
+  for (const [id, e] of Object.entries(theirs ?? {})) {
+    if (!validEntry(e)) continue;
+    const cur = next[id];
+    if (cur && (cur.updated ?? '') >= (e.updated ?? '')) continue;
+    next[id] = e;
+    changed += 1;
+  }
+  return { entries: next, changed };
+}
+
+/** Kit answers from another device fill this one's blanks; what's already here stays. */
+export function mergeKit(mine, theirs) {
+  if (!theirs || typeof theirs !== 'object') return mine;
+  const fields = { ...mine.fields };
+  for (const [key] of KIT_FIELDS) {
+    const v = theirs.fields?.[key];
+    if (typeof v === 'string' && v.trim() && !(fields[key] ?? '').trim()) fields[key] = v;
+  }
+  return { fields, extra: (mine.extra ?? '').trim() ? mine.extra : String(theirs.extra ?? '') };
+}
 
 // ---------------------------------------------------------------------------
 // The Job Application Autofill extension (extension/ in this repo) keeps its own history of

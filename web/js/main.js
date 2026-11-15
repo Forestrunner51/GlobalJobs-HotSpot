@@ -8,13 +8,15 @@ import { buildSearchIndex, searchOccupations, languageCounts, occupationsByLangu
 import { hasWebGL } from './util.js';
 import { escapeHtml, fmtInt, fmtLQ, shortMetro } from './format.js';
 import {
-  filterJobs, jobMarkers, strengthTags, jobSnippet, sortJobs, langCounts, textShard, postedLabel, safeUrl,
-  postingForPrep, LEVELS, LEVEL_LABEL, YEARS_OPTIONS, levelCounts, stateCounts, US_STATES, workCounts, isNew,
+  filterJobs, langsByGroup, jobMarkers, strengthTags, jobSnippet, sortJobs, langCounts, textShard, postedLabel, safeUrl,
+  postingForPrep, LEVELS, LEVEL_LABEL, YEARS_OPTIONS, levelCounts, stateCounts, US_STATES, workCounts, isNew, SORTS,
 } from './jobs.js';
 import {
   loadEntries, saveEntries, loadKit, saveKit, loadPrefs, savePrefs, setStatus, followedUp, followUpDue, counts,
   entriesWith, toCSV, prepBatch, exportBackup, parseBackup, kitItems, isoToday, KIT_FIELDS, mergeApplied, applicationKey,
+  kitAsText, encodeTransfer, decodeTransfer, mergeEntries, mergeKit, TRANSFER_PARAM, TRANSFER_MAX,
 } from './tracker.js';
+import { loadProfile, saveProfile, resumeSkills, resumeContact, fillKitFields, matchJob } from './profile.js';
 
 const $ = (sel) => document.querySelector(sel);
 const narrowMQ = window.matchMedia('(max-width: 760px)');
@@ -43,6 +45,19 @@ let kit = loadKit();
 const prefs = loadPrefs();
 let kitJob = null;
 let focusIndex = -1;
+// Your resume, as far as the postings tab keeps it: the tracked skills it mentions and your contact
+// details. The text itself lives only in this variable, for this visit.
+let profile = loadProfile();
+let skillSet = new Set(profile?.skills ?? []);
+let resumeText = null;
+let resumeName = '';
+let roleNames = new Set(); // keywords matched on job titles only (Platform, SRE, ...): searches, not skills
+const matchOf = (j) => (profile?.skills.length ? matchJob(j, skillSet, roleNames) : null);
+const openTexts = new Map(); // posting id -> full text, for cards you opened, so a re-render keeps them open
+let pendingApply = null; // the posting whose application you opened; asked about when you come back
+let leftForApply = false;
+let kitAsk = false;
+let wantedKind = null; // 'globe' or 'map': what to show whenever the map area is visible
 // The Job Application Autofill extension (extension/), when installed, marks this page and
 // relays messages (extension/src/content/site.ts). Without it, none of this does anything.
 const hasExtension = () => !!document.documentElement.dataset.jobAutofill;
@@ -69,6 +84,21 @@ function banner(text, action) {
     btn.onclick = () => { $('#banner').hidden = true; action.run(); };
   }
   $('#banner').hidden = false;
+}
+
+let toastTimer;
+/** A short confirmation at the bottom of the screen, with an optional action such as Undo. */
+function toast(text, action) {
+  $('#toast-text').textContent = text;
+  const btn = $('#toast-action');
+  btn.hidden = !action;
+  if (action) {
+    btn.textContent = action.label;
+    btn.onclick = () => { $('#toast').hidden = true; action.run(); };
+  }
+  $('#toast').hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, action ? 7000 : 3500);
 }
 
 function showFatal(html) {
@@ -113,26 +143,31 @@ function tooltipHtml(m) {
 }
 
 async function setView(kind) {
-  if (kind === viewKind && view) return;
-  view?.destroy();
-  view = null;
-  viewKind = kind;
+  wantedKind = kind;
   for (const tab of document.querySelectorAll('[data-view]')) {
     tab.setAttribute('aria-selected', String(tab.dataset.view === kind));
   }
+  if (mapCollapsed()) return undefined; // created when the map is shown
+  if (kind === viewKind && view) return undefined;
+  view?.destroy();
+  view = null;
+  viewKind = kind;
   const host = $('#viewport-inner');
   host.replaceChildren();
   const opts = { narrow: narrowMQ.matches, onMetroClick: selectMetro, tooltipHtml, onContextLost };
+  let made;
   try {
     if (kind === 'globe') {
       const { createGlobe } = await import('./globe.js');
-      view = await createGlobe(host, opts);
+      made = await createGlobe(host, opts);
     } else {
       const { createMap2D } = await import('./map2d.js');
-      view = await createMap2D(host, opts);
+      made = await createMap2D(host, opts);
     }
   } catch (err) {
     console.error(err);
+    if (viewKind !== kind) return undefined;
+    viewKind = null;
     if (kind === 'globe') {
       banner(`The 3D globe could not start (${err.message}). Showing the 2D map instead.`);
       return setView('map');
@@ -140,10 +175,32 @@ async function setView(kind) {
     banner('The map could not load. The ranked table below has the same data.');
     return undefined;
   }
-  if (viewKind !== kind) return undefined; // superseded while loading
+  if (viewKind !== kind || view) { // superseded while loading (another view, or the map was hidden)
+    made.destroy();
+    return undefined;
+  }
+  view = made;
   window.__view = view;
   pushToView();
   return undefined;
+}
+
+// On a phone the postings list comes first: the map is folded away until you ask for it.
+const mapCollapsed = () => narrowMQ.matches && state.mode === 'jobs' && !prefs.showMap;
+
+function syncMap() {
+  const collapsed = mapCollapsed();
+  document.body.classList.toggle('map-collapsed', collapsed);
+  if (collapsed) {
+    if (view || viewKind) {
+      view?.destroy();
+      view = null;
+      viewKind = null;
+      $('#viewport-inner').replaceChildren();
+    }
+  } else if (!view && !viewKind && wantedKind) {
+    void setView(wantedKind);
+  }
 }
 
 function onContextLost() {
@@ -315,6 +372,87 @@ function applyMode() {
     ? 'Map shows US postings with a city'
     : 'Data covers US metro areas only';
   if (jobs) $('#empty').hidden = true;
+  document.body.classList.toggle('mode-jobs', jobs);
+  $('#drawer-title').textContent = jobs ? 'Filters and my applications' : 'Occupations and resume';
+  syncMap();
+  syncMobileBar();
+}
+
+// ---------------------------------------------------------------------------
+// Phone layout: the sidebar is a full-screen drawer, opened from a bar at the bottom.
+// ---------------------------------------------------------------------------
+
+function setDrawer(open) {
+  document.body.classList.toggle('drawer-open', open);
+  if (open) $('#sidebar').scrollTop = 0;
+}
+
+const FILTER_DEFAULTS = {
+  q: '', where: 'all', work: 'any', usState: null, metro: null, fresh: false, focus: false, pay: false,
+  langs: [], levels: [], maxYears: null, yearsKnown: false,
+};
+
+function activeFilterCount() {
+  return state.langs.length + state.levels.length
+    + [state.q, state.where !== 'all', state.work !== 'any', state.usState, state.metro, state.fresh, state.focus,
+      state.pay, state.maxYears != null, state.yearsKnown].filter(Boolean).length;
+}
+
+function clearFilters() {
+  Object.assign(state, structuredClone(FILTER_DEFAULTS));
+  $('#job-q').value = '';
+  jobsShown = JOBS_PAGE;
+  view?.resetView();
+  refresh({ push: true });
+}
+
+function syncMobileBar() {
+  const jobs = state.mode === 'jobs';
+  const n = jobs ? activeFilterCount() : 0;
+  $('#mb-filters').textContent = jobs ? `Filters${n ? ` (${n})` : ''}` : 'Search or add a resume';
+  const saved = $('#mb-saved');
+  saved.hidden = !jobs;
+  const c = counts(entries);
+  saved.innerHTML = `★ Saved${c.saved ? ` (${fmtInt(c.saved)})` : ''}${c.due ? '<span class="dot" title="Follow-ups due"></span>' : ''}`;
+  saved.setAttribute('aria-pressed', String(state.mine === 'saved'));
+  const map = $('#mb-map');
+  map.hidden = !jobs;
+  map.setAttribute('aria-pressed', String(!!prefs.showMap));
+  $('#drawer-done').textContent = jobs
+    ? (state.mine ? 'Show my list' : `Show ${fmtInt(jobsListed.length)} posting${jobsListed.length === 1 ? '' : 's'}`)
+    : 'Show results';
+}
+
+function wireMobile() {
+  $('#mb-filters').addEventListener('click', () => setDrawer(true));
+  $('#empty-open').addEventListener('click', () => setDrawer(true));
+  $('#drawer-close').addEventListener('click', () => setDrawer(false));
+  $('#drawer-done').addEventListener('click', () => {
+    setDrawer(false);
+    window.scrollTo({ top: 0 });
+  });
+  $('#mb-saved').addEventListener('click', () => {
+    state.mine = state.mine === 'saved' ? null : 'saved';
+    state.metro = null;
+    jobsShown = JOBS_PAGE;
+    focusIndex = -1;
+    refresh({ push: true });
+    window.scrollTo({ top: 0 });
+  });
+  $('#mb-map').addEventListener('click', () => {
+    prefs.showMap = !prefs.showMap;
+    savePrefs(prefs);
+    syncMap();
+    syncMobileBar();
+    if (prefs.showMap) window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) setDrawer(false);
+  });
+  narrowMQ.addEventListener('change', () => {
+    setDrawer(false);
+    syncMap();
+  });
 }
 
 function setMode(mode) {
@@ -334,6 +472,9 @@ async function refreshJobs(token) {
       jobsData = await loadJobs();
       jobsById = new Map(jobsData.jobs.map((j) => [j.id, j]));
       langRegexes = new Map(jobsData.keywords.map((k) => [k.name, new RegExp(k.pattern, `${k.flags}g`)]));
+      groupOf = Object.fromEntries(jobsData.keywords.map((k) => [k.name, k.group ?? 'language']));
+      const roleGroups = new Set((jobsData.keywordGroups ?? []).filter((g) => g.titleOnly).map((g) => g.id));
+      roleNames = new Set(jobsData.keywords.filter((k) => roleGroups.has(k.group)).map((k) => k.name));
       // Links from before a language was renamed ("C#" -> "C# / .NET") still select it.
       const alias = new Map(jobsData.keywords.flatMap((k) => (k.aliases ?? []).map((a) => [a, k.name])));
       state.langs = [...new Set(state.langs.map((l) => alias.get(l) ?? l))];
@@ -351,11 +492,13 @@ async function refreshJobs(token) {
       if (token === refreshToken) $('#loading').hidden = true;
     }
     if (token !== refreshToken) return;
+    if (resumeText) setProfileFromResume(); // a resume read on the other tab, before postings loaded
     applyMode();
     syncJobControls();
     renderJobSources();
     setTimeout(syncFromExtension); // after this refresh finishes, since it may refresh again
   }
+  if (state.sort === 'match' && !profile?.skills.length) state.sort = 'relevance';
   // Postings you applied to or hid leave the list and every count, so the numbers agree.
   const done = (j) => prefs.hideDone && ['applied', 'hidden'].includes(entries[j.id]?.status);
   jobPool = jobsData.jobs.filter((j) => !done(j));
@@ -374,15 +517,18 @@ async function refreshJobs(token) {
   jobsListed = mine
     ? mine.map(([id, e]) => jobsById.get(id) ?? { id, ...e.job, gone: true })
       .filter((j) => !state.metro || j.regionIds?.includes(state.metro))
-    : sortJobs(state.metro ? anywhere.filter((j) => j.regionIds.includes(state.metro)) : anywhere, state.langs);
+    : sortJobs(state.metro ? anywhere.filter((j) => j.regionIds.includes(state.metro)) : anywhere, state.langs,
+      { by: state.sort, matchOf });
   pushToView();
+  renderResumeMatch();
   renderJobs(anywhere);
   renderDetailView();
+  syncMobileBar();
 }
 
 const jobFilters = () => ({
-  q: state.q, where: state.where, focus: state.focus, usState: state.usState, langs: state.langs,
-  work: state.work, fresh: state.fresh, meta: jobsData,
+  q: state.q, where: state.where, focus: state.focus, usState: state.usState, langs: state.langs, groupOf,
+  work: state.work, fresh: state.fresh, meta: jobsData, pay: state.pay,
   levels: state.levels, maxYears: state.maxYears, yearsKnown: state.yearsKnown,
 });
 
@@ -401,12 +547,28 @@ function renderPlacePickers(withoutState) {
   $('#job-city').value = state.metro ?? '';
 }
 
-const langNames = () => jobsData.keywords.map((k) => k.name);
 const langList = (names) => (names.length > 2 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names.join(' or '));
+/** "Java or Go and React": any pick within a row, every row. */
+const pickedList = () => langsByGroup(state.langs, groupOf).map(langList).join(' and ');
 
+// One row of pills per keyword group (Languages, Frameworks, ...); data from before groups is one row.
 function renderLangPills() {
-  $('#job-langs').innerHTML = langCounts(jobPool, langNames(), jobFilters()).map(([name, n]) => `<button type="button" class="pill"
-    data-lang="${escapeHtml(name)}" aria-pressed="${state.langs.includes(name)}">${escapeHtml(name)}<span class="count">${fmtInt(n)}</span></button>`).join('');
+  const groups = jobsData.keywordGroups ?? [{ id: 'language', label: 'Languages' }];
+  const counts = new Map(langCounts(jobPool, jobsData.keywords.map((k) => k.name), jobFilters()));
+  $('#job-langs').innerHTML = groups.map((g) => {
+    const names = jobsData.keywords.filter((k) => (k.group ?? 'language') === g.id).map((k) => k.name);
+    if (!names.length) return '';
+    return `<div class="lang-row" role="group" aria-label="${escapeHtml(g.label)}">
+      ${groups.length > 1 ? `<span class="lang-row-label">${escapeHtml(g.label)}</span>` : ''}
+      ${names.map((name) => `<button type="button" class="pill" data-lang="${escapeHtml(name)}"
+        aria-pressed="${state.langs.includes(name)}">${escapeHtml(name)}<span class="count">${fmtInt(counts.get(name))}</span></button>`).join('')}
+    </div>`;
+  }).join('');
+  // The role searches again as one-tap chips above the list, so on a phone they need no drawer.
+  const quick = $('#quick-roles');
+  quick.hidden = !roleNames.size || !!state.mine;
+  quick.innerHTML = `<span class="quick-label">Quick search</span>${[...roleNames].map((name) => `<button type="button" class="pill" data-lang="${escapeHtml(name)}"
+    aria-pressed="${state.langs.includes(name)}">${escapeHtml(name)}<span class="count">${fmtInt(counts.get(name))}</span></button>`).join('')}`;
 }
 
 function renderWorkStyles() {
@@ -426,6 +588,10 @@ function syncJobControls() {
   for (const r of document.querySelectorAll('input[name="where"]')) r.checked = r.value === state.where;
   $('#job-focus').checked = state.focus;
   $('#job-fresh').checked = state.fresh;
+  $('#job-pay').checked = state.pay;
+  const sort = $('#job-sort');
+  sort.innerHTML = SORTS.map(([key, label]) => `<option value="${key}"${key === 'match' && !profile?.skills.length ? ' disabled' : ''}>${key === 'match' && !profile?.skills.length ? `${label} (add a resume)` : label}</option>`).join('');
+  sort.value = state.sort;
   if (jobsData) {
     const none = !jobsData.jobs.some((j) => isNew(j, jobsData));
     $('#job-fresh-label').textContent = none && jobsData.trackedSince
@@ -434,7 +600,7 @@ function syncJobControls() {
   }
   $('#job-years').value = state.maxYears == null ? '' : String(state.maxYears);
   $('#job-years-known').checked = state.yearsKnown;
-  $('#job-focus-label').textContent = state.langs.length ? `Focused on ${langList(state.langs)} only` : 'Focused postings only';
+  $('#job-focus-label').textContent = state.langs.length ? `Focused on ${pickedList()} only` : 'Focused postings only';
 }
 
 // A bare date ("2026-10-19") would parse as UTC midnight and show as the day before in US time zones.
@@ -464,6 +630,7 @@ function renderJobSources() {
 
 // The same patterns fetch_jobs.py matched with, so highlights agree with the counts.
 let langRegexes = new Map();
+let groupOf = {}; // keyword name -> filter row id
 
 function highlight(text, langs) {
   const ranges = [];
@@ -508,24 +675,27 @@ function jobCard(j) {
     `<span class="muted">via ${escapeHtml(jobsData.sources.find((s) => s.source === j.source)?.label ?? j.source)}</span>`,
   ].filter(Boolean).join(' · ');
   const entry = entries[j.id];
+  const open = openTexts.get(j.id);
+  const fit = matchOf(j);
+  const fitTag = fit ? `<span class="tag is-match${fit.percent >= 70 ? ' is-strong' : ''}" title="${escapeHtml(`You have: ${fit.have.join(', ') || 'none of its listed skills'}${fit.missing.length ? `. Not on your resume: ${fit.missing.join(', ')}` : ''}`)}">${fit.percent}% resume match${fit.missing.length && fit.have.length ? ` · no ${escapeHtml(fit.missing.slice(0, 2).join(', '))}${fit.missing.length > 2 ? '…' : ''}` : ''}</span>` : '';
   return `<article class="job${entry?.status === 'applied' ? ' is-applied' : ''}" data-id="${escapeHtml(j.id)}" tabindex="-1">
     <h3 class="job-title">${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(j.title)}</a>` : escapeHtml(j.title)}</h3>
     <div class="job-meta">${meta}</div>
-    <div class="job-tags">${newTag}${tags.map((t) => `<span class="tag${t.focus ? ' is-focus' : ''}">${escapeHtml(t.text)}</span>`).join('')}${more ? `<span class="tag" title="${escapeHtml(j.keywords.join(', '))}">+${more} more</span>` : ''}<span class="tag">${escapeHtml(LEVEL_LABEL[j.level] ?? 'Mid / not stated')}</span>${j.years != null ? `<span class="tag">${j.years}+ yrs experience</span>` : ''}${remoteTag}${j.salary ? `<span class="tag">${escapeHtml(j.salary)}</span>` : ''}</div>
+    <div class="job-tags">${newTag}${fitTag}${tags.map((t) => `<span class="tag${t.focus ? ' is-focus' : ''}">${escapeHtml(t.text)}</span>`).join('')}${more ? `<span class="tag" title="${escapeHtml(j.keywords.join(', '))}">+${more} more</span>` : ''}<span class="tag">${escapeHtml(LEVEL_LABEL[j.level] ?? 'Mid / not stated')}</span>${j.years != null ? `<span class="tag">${j.years}+ yrs experience</span>` : ''}${remoteTag}${j.salary ? `<span class="tag">${escapeHtml(j.salary)}</span>` : ''}</div>
     ${snippet ? `<p class="job-snippet">${highlight(snippet.text, state.langs.length ? state.langs : j.keywords)}</p>` : ''}
     ${statusLine(entry)}
     <div class="job-actions">
       ${apply ? `<a class="btn-primary" href="${escapeHtml(apply)}" target="_blank" rel="noopener noreferrer" data-apply>Apply</a>` : ''}
       <button type="button" class="ghost" data-save aria-pressed="${entry?.status === 'saved'}">${entry?.status === 'saved' ? '★ Saved' : '☆ Save'}</button>
-      <button type="button" class="ghost" data-prep>Copy for prep</button>
+      <button type="button" class="ghost desk-only" data-prep>Copy for prep</button>
       <span class="secondary">
-        <button type="button" class="linklike" data-read aria-expanded="false">Read posting</button>
+        <button type="button" class="linklike" data-read aria-expanded="${open != null}">${open != null ? 'Hide posting' : 'Read posting'}</button>
         <button type="button" class="linklike" data-applied>${entry?.status === 'applied' ? 'Not applied' : 'Mark applied'}</button>
         <button type="button" class="linklike" data-hide>${entry?.status === 'hidden' ? 'Unhide' : 'Not interested'}</button>
       </span>
     </div>
     <p class="prep-msg status" role="status"></p>
-    <div class="job-text" hidden></div>
+    <div class="job-text"${open != null ? ' data-loaded="1"' : ' hidden'}>${escapeHtml(open ?? '')}</div>
   </article>`;
 }
 
@@ -561,15 +731,20 @@ function renderJobs(anywhere) {
     ? `${mineLabel}: ${fmtInt(n)} posting${n === 1 ? '' : 's'}${metroLabel ? ` in ${metroLabel}` : ''}`
     : place
       ? `${fmtInt(n)} posting${n === 1 ? '' : 's'} in ${place}`
-      : `${fmtInt(n)} posting${n === 1 ? '' : 's'}${state.langs.length ? ` mentioning ${langList(state.langs)}` : ''}`;
+      : `${fmtInt(n)} posting${n === 1 ? '' : 's'}${state.langs.length ? ` mentioning ${pickedList()}` : ''}`;
   $('#jobs-clear-metro').hidden = !(state.metro || state.usState);
+  const active = activeFilterCount();
+  $('#jobs-clear').hidden = !active || !!state.mine;
+  $('#jobs-clear').textContent = `Clear filters (${active})`;
   const onMap = anywhere.filter((j) => j.regionIds.length).length;
   $('#jobs-count').textContent = `${fmtInt(anywhere.length)} of ${fmtInt(jobsData.jobs.length)} postings match. ${fmtInt(onMap)} have a US city and are on the map.`;
   const shown = jobsListed.slice(0, jobsShown);
   $('#jobs-list').innerHTML = shown.length
     ? shown.map((j) => (j.gone ? goneCard(j) : jobCard(j))).join('') + (n > shown.length
       ? `<button type="button" class="ghost more-jobs" data-more>Show ${fmtInt(Math.min(JOBS_PAGE, n - shown.length))} more of ${fmtInt(n - shown.length)}</button>` : '')
-    : `<p class="muted">${state.mine ? 'Nothing here yet.' : 'No postings match these filters.'}</p>`;
+    : `<p class="muted">${state.mine
+      ? { saved: 'Nothing saved yet. Tap ☆ Save on a posting to keep it here.', applied: 'No applications yet. Postings you mark applied show here with their follow-up dates.', hidden: 'Nothing hidden.' }[state.mine]
+      : 'No postings match these filters.'}</p>${!state.mine && active ? '<button type="button" class="ghost" data-clear-filters>Clear filters</button>' : ''}`;
   focusCard(Math.min(focusIndex, shown.length - 1), { scroll: false });
 }
 
@@ -602,17 +777,22 @@ function wireJobs() {
   });
   $('#job-fresh').addEventListener('change', (e) => { state.fresh = e.target.checked; jobsShown = JOBS_PAGE; refresh(); });
   $('#job-focus').addEventListener('change', (e) => { state.focus = e.target.checked; jobsShown = JOBS_PAGE; refresh(); });
+  $('#job-pay').addEventListener('change', (e) => { state.pay = e.target.checked; jobsShown = JOBS_PAGE; refresh(); });
+  $('#job-sort').addEventListener('change', (e) => { state.sort = e.target.value; jobsShown = JOBS_PAGE; focusIndex = -1; refresh(); });
+  $('#jobs-clear').addEventListener('click', clearFilters);
   $('#jobs-clear-metro').addEventListener('click', () => { state.usState = null; selectMetro(null); });
   $('#job-years').insertAdjacentHTML('beforeend', YEARS_OPTIONS
     .map((n) => `<option value="${n}">${n === 1 ? '0–1 years' : `${n} years`}</option>`).join(''));
-  $('#job-langs').addEventListener('click', (e) => {
+  const toggleLang = (e) => {
     const pill = e.target.closest('[data-lang]');
     if (!pill) return;
     const name = pill.dataset.lang;
     state.langs = state.langs.includes(name) ? state.langs.filter((l) => l !== name) : [...state.langs, name];
     jobsShown = JOBS_PAGE;
     refresh({ push: true });
-  });
+  };
+  $('#job-langs').addEventListener('click', toggleLang);
+  $('#quick-roles').addEventListener('click', toggleLang);
   $('#job-levels').addEventListener('click', (e) => {
     const pill = e.target.closest('[data-level]');
     if (!pill) return;
@@ -642,6 +822,7 @@ function wireJobs() {
       renderJobs(state.mine ? jobsListed.filter((j) => !j.gone) : filterJobs(jobPool, jobFilters()));
       return;
     }
+    if (e.target.closest('[data-clear-filters]')) { clearFilters(); return; }
     const card = e.target.closest('.job');
     if (!card) return;
     focusIndex = [...document.querySelectorAll('#jobs-list .job')].indexOf(card);
@@ -649,7 +830,13 @@ function wireJobs() {
     if (e.target.closest('[data-followed]')) { entries = followedUp(entries, card.dataset.id); persist(); return; }
     const job = jobsById.get(card.dataset.id);
     if (!job) return;
-    if (e.target.closest('[data-apply]')) { openKit(job); return; } // the link itself opens the employer's page
+    if (e.target.closest('[data-apply]')) { // the link itself opens the employer's page
+      pendingApply = job;
+      leftForApply = false;
+      kitAsk = false;
+      openKit(job);
+      return;
+    }
     if (e.target.closest('[data-save]')) { updateStatus(job, entries[job.id]?.status === 'saved' ? null : 'saved'); return; }
     if (e.target.closest('[data-applied]')) { updateStatus(job, entries[job.id]?.status === 'applied' ? null : 'applied'); return; }
     if (e.target.closest('[data-hide]')) { updateStatus(job, entries[job.id]?.status === 'hidden' ? null : 'hidden'); return; }
@@ -657,9 +844,11 @@ function wireJobs() {
     const readBtn = card.querySelector('[data-read]');
     const showText = async () => {
       if (!textEl.dataset.loaded) {
+        readBtn.textContent = 'Loading…';
         textEl.textContent = (await jobText(job.id)) || 'Full text is not available for this posting. Open it on the employer\'s site.';
         textEl.dataset.loaded = '1';
       }
+      openTexts.set(job.id, textEl.textContent);
       textEl.hidden = false;
       readBtn.setAttribute('aria-expanded', 'true');
       readBtn.textContent = 'Hide posting';
@@ -667,6 +856,7 @@ function wireJobs() {
     if (e.target.closest('[data-read]')) {
       if (textEl.hidden) await showText();
       else {
+        openTexts.delete(job.id);
         textEl.hidden = true;
         readBtn.setAttribute('aria-expanded', 'false');
         readBtn.textContent = 'Read posting';
@@ -674,12 +864,10 @@ function wireJobs() {
     }
     if (e.target.closest('[data-prep]')) {
       const msg = card.querySelector('.prep-msg');
-      const posting = postingForPrep(job, await jobText(job.id));
-      try {
-        await navigator.clipboard.writeText(posting);
+      if (await copyText(jobText(job.id).then((text) => postingForPrep(job, text)))) {
         msg.className = 'prep-msg status ok';
         msg.innerHTML = 'Copied. In Terminal, from the project folder, run:<br><code class="cmd">pbpaste | .venv/bin/python apply/jobprep.py prep</code>';
-      } catch {
+      } else {
         await showText();
         msg.className = 'prep-msg status warn';
         msg.textContent = 'This browser blocked clipboard access. Select the posting text below, copy it, then run: pbpaste | .venv/bin/python apply/jobprep.py prep';
@@ -697,12 +885,30 @@ function persist() {
   refresh();
 }
 
-function updateStatus(job, status) {
-  const was = entries[job.id]?.status;
+function updateStatus(job, status, { quiet = false } = {}) {
+  const prev = entries[job.id];
+  const was = prev?.status;
   entries = setStatus(entries, job, status);
   if (kitJob?.id === job.id) renderKit();
   persist();
   if (hasExtension() && status !== was && (status === 'applied' || was === 'applied')) void tellExtension(job, status === 'applied');
+  if (quiet || status === was) return;
+  // Applied and hidden postings leave the list, so say what happened and offer the way back.
+  const undo = {
+    label: 'Undo',
+    run: () => {
+      const { [job.id]: _, ...rest } = entries;
+      entries = prev ? { ...rest, [job.id]: prev } : rest;
+      if (kitJob?.id === job.id) renderKit();
+      persist();
+      if (hasExtension() && (status === 'applied' || was === 'applied')) void tellExtension(job, was === 'applied');
+    },
+  };
+  if (status === 'applied') toast(`Marked applied. Follow-up due ${shortDate(entries[job.id].followUp)}.`, undo);
+  else if (status === 'hidden') toast('Hidden. It won\'t show in the list again.', undo);
+  else if (status === 'saved') toast('Saved to your list.');
+  else if (was === 'hidden') toast('Back in the list.');
+  else if (was) toast(`Removed from ${was === 'applied' ? 'Applied' : 'Saved'}.`, undo);
 }
 
 const forExtension = (j) => ({
@@ -763,26 +969,52 @@ function renderMine() {
 
 function renderKit() {
   const el = $('#apply-kit');
-  if (!kitJob) { el.hidden = true; return; }
+  if (!kitJob) { el.hidden = true; document.body.classList.remove('kit-open'); return; }
   const items = kitItems(kit);
   const applied = entries[kitJob.id]?.status === 'applied';
+  const asking = kitAsk && !applied;
+  const again = safeUrl(kitJob.applyUrl) ?? safeUrl(kitJob.url);
   el.innerHTML = `<div class="kit-head">
       <div><span class="muted small">Applying to</span><strong>${escapeHtml(kitJob.title)}</strong><span class="small">${escapeHtml(kitJob.company)}</span></div>
       <button type="button" class="icon-btn" data-kit-close aria-label="Close apply kit">×</button>
     </div>
-    <p class="hint">The application opened in a new tab. Copy your answers from here into the form, then submit it yourself.</p>
+    ${asking ? `<div class="kit-ask"><strong>Did you submit this application?</strong>
+      <div class="kit-actions">
+        <button type="button" class="btn-primary" data-kit-yes>Yes, I applied</button>
+        <button type="button" class="ghost" data-kit-later>Not yet, save it for later</button>
+      </div></div>`
+    : '<p class="hint">The application opened in a new tab. Copy your answers from here into the form, then submit it yourself.</p>'}
     ${items.length ? `<ul class="kit-list">${items.map(([label, value], i) => `<li>
         <span class="kit-label">${escapeHtml(label)}</span><span class="kit-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
         <button type="button" class="ghost small" data-copy="${i}">Copy</button></li>`).join('')}</ul>`
-    : '<p class="small">Your apply kit is empty. Fill it in once with the answers forms always ask for.</p>'}
+    : `<p class="small">Your apply kit is empty. Fill it in once with the answers forms always ask for${profile?.contact && Object.keys(profile.contact).length ? '; your resume\'s details are ready to drop in' : ''}.</p>`}
     <div class="kit-actions">
-      <button type="button" class="${applied ? 'ghost' : 'btn-primary'}" data-kit-applied>${applied ? 'Applied ✓ (undo)' : 'Mark as applied'}</button>
-      <button type="button" class="ghost small" data-kit-prep>Copy posting for prep</button>
+      ${asking ? '' : `<button type="button" class="${applied ? 'ghost' : 'btn-primary'}" data-kit-applied>${applied ? 'Applied ✓ (undo)' : 'Mark as applied'}</button>`}
+      ${again ? `<a class="ghost small" href="${escapeHtml(again)}" target="_blank" rel="noopener noreferrer" data-kit-again>Open the form again</a>` : ''}
+      ${items.length > 1 ? '<button type="button" class="ghost small" data-kit-all>Copy all answers</button>' : ''}
+      <button type="button" class="ghost small desk-only" data-kit-prep>Copy posting for prep</button>
       <button type="button" class="linklike small" data-kit-edit>${items.length ? 'Edit kit' : 'Set up kit'}</button>
     </div>
-    <p class="hint">For tailored answers ("Why this company?", a short cover note), run prep on this posting first; they're in <code>answers.txt</code> in its <code>apply/out/</code> folder.</p>
+    <p class="hint desk-only">For tailored answers ("Why this company?", a short cover note), run prep on this posting first; they're in <code>answers.txt</code> in its <code>apply/out/</code> folder.</p>
     <p class="status" role="status" data-kit-msg></p>`;
   el.hidden = false;
+  document.body.classList.add('kit-open');
+}
+
+function closeKit() {
+  kitJob = null;
+  pendingApply = null;
+  kitAsk = false;
+  renderKit();
+}
+
+// Coming back from the employer's tab: ask once whether the application went in.
+function onReturn() {
+  if (!pendingApply || !leftForApply || kitJob?.id !== pendingApply.id) return;
+  leftForApply = false;
+  if (entries[pendingApply.id]?.status === 'applied') return;
+  kitAsk = true;
+  renderKit();
 }
 
 function openKit(job) {
@@ -790,9 +1022,12 @@ function openKit(job) {
   renderKit();
 }
 
+/**
+ * Copy text, or a promise of text still loading. Safari only lets a page write to the clipboard
+ * from inside the tap itself, so text that isn't ready goes in as a promise the browser waits on.
+ */
 async function copyText(text, button) {
-  try {
-    await navigator.clipboard.writeText(text);
+  const done = () => {
     if (button) {
       const label = button.textContent;
       button.textContent = 'Copied';
@@ -800,16 +1035,137 @@ async function copyText(text, button) {
       setTimeout(() => { button.textContent = label; button.classList.remove('copied'); }, 1200);
     }
     return true;
+  };
+  if (typeof text !== 'string' && typeof ClipboardItem === 'function') {
+    try {
+      const blob = Promise.resolve(text).then((t) => new Blob([t], { type: 'text/plain' }));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return done();
+    } catch { /* older Chrome and Firefox don't take a promise; write the plain text below */ }
+  }
+  try {
+    await navigator.clipboard.writeText(await text);
+    return done();
   } catch {
     return false;
   }
 }
 
+/** Edit the apply kit. Empty fields take your resume's contact details, marked so you can check them. */
 function openKitEditor() {
-  $('#kit-fields').innerHTML = KIT_FIELDS.map(([key, label, placeholder]) => `<label>${escapeHtml(label)}
-    <input name="${key}" value="${escapeHtml(kit.fields?.[key] ?? '')}" placeholder="${escapeHtml(placeholder)}" autocomplete="off"></label>`).join('');
+  const { fields, filled } = fillKitFields(kit.fields, profile?.contact);
+  $('#kit-fields').innerHTML = KIT_FIELDS.map(([key, label, placeholder, attrs]) => `<label${filled.includes(key) ? ' class="from-resume"' : ''}>${escapeHtml(label)}${filled.includes(key) ? ' <span class="muted">(from your resume)</span>' : ''}
+    <input name="${key}" value="${escapeHtml(fields[key] ?? '')}" placeholder="${escapeHtml(placeholder)}" ${attrs ?? ''}></label>`).join('');
+  const note = $('#kit-from-resume');
+  note.hidden = !filled.length;
+  note.textContent = `Filled ${filled.length} blank field${filled.length === 1 ? '' : 's'} from your resume. Check ${filled.length === 1 ? 'it' : 'them'}, then press Save.`;
   $('#kit-extra').value = kit.extra ?? '';
   $('#kit-editor').showModal();
+}
+
+// ---------------------------------------------------------------------------
+// Resume on the postings tab: which tracked skills it mentions, and your contact details.
+// ---------------------------------------------------------------------------
+
+function setProfileFromResume() {
+  profile = {
+    file: resumeName, added: isoToday(),
+    skills: resumeSkills(resumeText, [...langRegexes].filter(([name]) => !roleNames.has(name))),
+    contact: resumeContact(resumeText),
+  };
+  skillSet = new Set(profile.skills);
+  if (!saveProfile(profile)) banner('This browser blocked local storage, so your resume match will be lost when you close the tab.');
+}
+
+function renderResumeMatch() {
+  const body = $('#resume-match-body');
+  $('#jobs-drop-main').textContent = profile ? 'Use a different resume' : 'Add your resume';
+  $('#jobs-drop').classList.toggle('compact', !!profile);
+  if (!profile) {
+    body.innerHTML = '<p class="hint">See how well each posting fits your skills, sort by fit, and fill your apply kit from your contact details. Only the skills it mentions and those contact details are kept, in this browser.</p>';
+    return;
+  }
+  const contact = Object.keys(profile.contact ?? {}).length;
+  const kitBlank = fillKitFields(kit.fields, profile.contact).filled.length;
+  const tagOnly = new Set((jobsData?.keywordGroups ?? []).filter((g) => g.tagOnly).map((g) => g.id));
+  const filterable = profile.skills.filter((k) => !tagOnly.has(groupOf[k] ?? 'language'));
+  body.innerHTML = `<p class="small">${profile.file ? `<strong>${escapeHtml(profile.file)}</strong>: ` : ''}${profile.skills.length
+    ? `${profile.skills.length} tracked skill${profile.skills.length === 1 ? '' : 's'} found.`
+    : '<span class="warn">none of the tracked skills found, so postings can\'t be scored.</span>'}</p>
+    ${profile.skills.length ? `<div class="examples">${profile.skills.map((k) => `<span class="tag is-focus">${escapeHtml(k)}</span>`).join('')}</div>` : ''}
+    <div class="mine-actions">
+      ${profile.skills.length ? `<button type="button" class="ghost small" data-resume-sort aria-pressed="${state.sort === 'match'}">${state.sort === 'match' ? 'Sorted by fit ✓' : 'Sort by fit'}</button>` : ''}
+      ${filterable.length ? '<button type="button" class="ghost small" data-resume-filter>Show only my languages</button>' : ''}
+      ${contact && kitBlank ? `<button type="button" class="ghost small" data-resume-kit>Fill apply kit (${kitBlank})</button>` : ''}
+      <button type="button" class="linklike small" data-resume-forget>Forget resume</button>
+    </div>`;
+}
+
+async function handleJobsResume(file) {
+  const status = $('#resume-match-status');
+  status.className = 'status';
+  if (!jobsData) {
+    status.textContent = 'Postings are still loading. Try again in a moment.';
+    $('#jobs-resume-file').value = '';
+    return;
+  }
+  status.textContent = `Reading ${file.name} on this device…`;
+  try {
+    const { extractText } = await import('./resume.js');
+    const { text, words } = await extractText(file);
+    resumeText = text;
+    resumeName = file.name;
+    setProfileFromResume();
+    const n = profile.skills.length;
+    if (n) state.sort = 'match';
+    status.className = n ? 'status ok' : 'status warn';
+    status.textContent = n
+      ? `Read ${fmtInt(words)} words. Postings are now sorted by how well they fit; each shows a match percent.`
+      : `Read ${fmtInt(words)} words, but none of the skills this site tracks (${jobsData.keywords.slice(0, 4).map((k) => k.name).join(', ')}…) appear in it.`;
+    jobsShown = JOBS_PAGE;
+    refresh();
+  } catch (err) {
+    if (!err.kind) console.error(err);
+    status.className = 'status error';
+    status.textContent = err.kind ? err.message : `Could not read that file (${err.message}).`;
+  } finally {
+    $('#jobs-resume-file').value = '';
+  }
+}
+
+function wireResumeMatch() {
+  const input = $('#jobs-resume-file');
+  const drop = $('#jobs-drop');
+  input.addEventListener('change', () => input.files[0] && handleJobsResume(input.files[0]));
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('is-over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('is-over'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('is-over');
+    if (e.dataTransfer.files[0]) handleJobsResume(e.dataTransfer.files[0]);
+  });
+  $('#resume-match-body').addEventListener('click', (e) => {
+    if (e.target.closest('[data-resume-sort]')) {
+      state.sort = state.sort === 'match' ? 'relevance' : 'match';
+      jobsShown = JOBS_PAGE;
+      refresh();
+    }
+    if (e.target.closest('[data-resume-filter]')) {
+      const tagOnly = new Set((jobsData.keywordGroups ?? []).filter((g) => g.tagOnly).map((g) => g.id));
+      state.langs = profile.skills.filter((k) => !tagOnly.has(groupOf[k] ?? 'language'));
+      jobsShown = JOBS_PAGE;
+      refresh({ push: true });
+    }
+    if (e.target.closest('[data-resume-kit]')) openKitEditor();
+    if (e.target.closest('[data-resume-forget]')) {
+      profile = null;
+      resumeText = null;
+      skillSet = new Set();
+      saveProfile(null);
+      $('#resume-match-status').textContent = '';
+      refresh();
+    }
+  });
 }
 
 function download(name, text, type) {
@@ -851,7 +1207,7 @@ function focusCard(i, { scroll = true } = {}) {
 // j/k to move between postings, then one key per action. Only in the postings tab, never while typing.
 function onJobKeys(e) {
   if (state.mode !== 'jobs' || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === 'Escape' && kitJob) { kitJob = null; renderKit(); return; }
+  if (e.key === 'Escape' && kitJob && !$('#kit-editor').open) { closeKit(); return; }
   if (e.target.closest('input, textarea, select, [contenteditable], dialog')) return;
   const keys = { j: 1, k: -1 };
   if (e.key in keys) {
@@ -874,7 +1230,13 @@ function wireApplying() {
     focusIndex = -1;
     refresh({ push: true });
   });
-  $('#due-line').addEventListener('click', () => { state.mine = 'applied'; refresh({ push: true }); });
+  $('#due-line').addEventListener('click', () => {
+    state.mine = 'applied';
+    state.metro = null;
+    jobsShown = JOBS_PAGE;
+    setDrawer(false);
+    refresh({ push: true });
+  });
   $('#hide-done').addEventListener('change', (e) => { prefs.hideDone = e.target.checked; savePrefs(prefs); refresh(); });
   $('#kit-open').addEventListener('click', openKitEditor);
   $('#batch-download').addEventListener('click', downloadBatch);
@@ -898,6 +1260,23 @@ function wireApplying() {
     }
   });
   if (hasExtension()) toExtension('hello');
+  $('#transfer-make').addEventListener('click', async () => {
+    const code = await encodeTransfer(entries, kit);
+    if (code.length > TRANSFER_MAX) {
+      mineMessage('Your list is too long for a link. Use "Back up to a file" and "Restore from a file" instead.', 'warn');
+      return;
+    }
+    $('#transfer-link').value = `${location.origin}${location.pathname}?mode=jobs#${TRANSFER_PARAM}=${code}`;
+    $('#transfer-share').hidden = typeof navigator.share !== 'function';
+    $('#transfer-box').hidden = false;
+  });
+  $('#transfer-link').addEventListener('focus', (e) => e.target.select());
+  $('#transfer-copy').addEventListener('click', async (e) => {
+    if (!(await copyText($('#transfer-link').value, e.currentTarget))) $('#transfer-link').select();
+  });
+  $('#transfer-share').addEventListener('click', () => {
+    navigator.share({ title: 'My job list', url: $('#transfer-link').value }).catch(() => {});
+  });
   $('#export-csv').addEventListener('click', () => download(`applications-${isoToday()}.csv`, toCSV(entries), 'text/csv'));
   $('#backup').addEventListener('click', () => download(`job-tracker-backup-${isoToday()}.json`,
     JSON.stringify(exportBackup(entries, kit), null, 1), 'application/json'));
@@ -918,19 +1297,46 @@ function wireApplying() {
   $('#apply-kit').addEventListener('click', async (e) => {
     if (!kitJob) return;
     const msg = $('#apply-kit [data-kit-msg]');
+    const blocked = 'This browser blocked the clipboard. Press and hold the answer to select and copy it instead.';
     const copy = e.target.closest('[data-copy]');
     if (copy) {
       const [, value] = kitItems(kit)[Number(copy.dataset.copy)] ?? [];
-      if (value && !(await copyText(value, copy))) msg.textContent = 'This browser blocked the clipboard. Select the text and copy it instead.';
+      if (value && !(await copyText(value, copy))) msg.textContent = blocked;
     }
-    if (e.target.closest('[data-kit-close]')) { kitJob = null; renderKit(); }
+    const all = e.target.closest('[data-kit-all]');
+    if (all && !(await copyText(kitAsText(kit), all))) msg.textContent = blocked;
+    if (e.target.closest('[data-kit-again]')) { pendingApply = kitJob; leftForApply = false; kitAsk = false; }
+    if (e.target.closest('[data-kit-close]')) closeKit();
     if (e.target.closest('[data-kit-edit]')) openKitEditor();
-    if (e.target.closest('[data-kit-applied]')) updateStatus(kitJob, entries[kitJob.id]?.status === 'applied' ? 'saved' : 'applied');
-    if (e.target.closest('[data-kit-prep]')) {
-      const ok = await copyText(postingForPrep(kitJob, await jobText(kitJob.id)), e.target.closest('[data-kit-prep]'));
+    if (e.target.closest('[data-kit-yes]')) {
+      const job = kitJob;
+      closeKit();
+      updateStatus(job, 'applied');
+      return;
+    }
+    if (e.target.closest('[data-kit-later]')) {
+      const job = kitJob;
+      closeKit();
+      if (!entries[job.id]) updateStatus(job, 'saved');
+      return;
+    }
+    if (e.target.closest('[data-kit-applied]')) {
+      // Undo goes back to where the posting was: saved if you had saved it, otherwise off your list.
+      const entry = entries[kitJob.id];
+      updateStatus(kitJob, entry?.status === 'applied' ? (entry.saved ? 'saved' : null) : 'applied', { quiet: true });
+    }
+    const prep = e.target.closest('[data-kit-prep]');
+    if (prep) {
+      const job = kitJob;
+      const ok = await copyText(jobText(job.id).then((text) => postingForPrep(job, text)), prep);
       msg.innerHTML = ok ? 'Copied. Run: <code class="cmd">pbpaste | .venv/bin/python apply/jobprep.py prep</code>' : 'This browser blocked the clipboard.';
     }
   });
+  // Leaving for the employer's tab and coming back (a new tab hides this page; a new window blurs it).
+  const left = () => { if (pendingApply) leftForApply = true; };
+  document.addEventListener('visibilitychange', () => (document.hidden ? left() : onReturn()));
+  window.addEventListener('blur', left);
+  window.addEventListener('focus', onReturn);
 
   const closeEditor = () => $('#kit-editor').close();
   $('#kit-cancel').addEventListener('click', closeEditor);
@@ -940,6 +1346,8 @@ function wireApplying() {
     kit = { fields, extra: $('#kit-extra').value };
     if (!saveKit(kit)) banner('This browser blocked local storage, so the apply kit will be lost when you close the tab.');
     renderKit();
+    renderResumeMatch();
+    toast('Apply kit saved.');
   });
   document.addEventListener('keydown', onJobKeys);
 }
@@ -1105,6 +1513,9 @@ async function handleResume(file) {
   try {
     const [{ extractText }, { buildMatcher }] = await Promise.all([import('./resume.js'), import('./matcher.js')]);
     const { text, pages, words } = await extractText(file);
+    resumeText = text; // the postings tab scores postings against the same resume
+    resumeName = file.name;
+    if (jobsData) setProfileFromResume();
     matcher ??= buildMatcher(core.occupations);
     suggestions = matcher.match(text, 10);
     if (!suggestions.length) {
@@ -1229,6 +1640,9 @@ async function init() {
   wireResume();
   wireJobs();
   wireApplying();
+  wireResumeMatch();
+  wireMobile();
+  void receiveTransfer();
 
   const examples = ['15-1252', '29-1141', '17-2171', '27-2011'].filter((c) => core.occByCode.has(c));
   $('#examples').innerHTML = examples.map((c) => `<button type="button" class="pill" data-code="${c}">${escapeHtml(core.occByCode.get(c).label)}</button>`).join('');
@@ -1243,6 +1657,29 @@ async function init() {
   const initial = refresh();
   await setView(webglOK ? 'globe' : 'map');
   await initial;
+}
+
+/** A link made by "Send my list to another device": offer to add its postings and kit answers here. */
+async function receiveTransfer() {
+  const m = location.hash.match(new RegExp(`^#${TRANSFER_PARAM}=([\\w.-]+)$`));
+  if (!m) return;
+  history.replaceState(null, '', `${location.pathname}${location.search}`); // keep it out of the address bar and history
+  const data = await decodeTransfer(m[1]);
+  if (!data) {
+    banner('That link from your other device is incomplete (it may have been cut off when it was sent). Make a new one, or use Back up and Restore.');
+    return;
+  }
+  const { entries: merged, changed } = mergeEntries(entries, data.entries);
+  const n = Object.keys(data.entries).length;
+  banner(`This link carries ${n} posting${n === 1 ? '' : 's'}${data.kit ? ' and apply-kit answers' : ''} from your other device. ${changed} ${changed === 1 ? 'is' : 'are'} new or newer than what's here.`, {
+    label: 'Add to this device',
+    run: () => {
+      entries = merged;
+      if (data.kit) { kit = mergeKit(kit, data.kit); saveKit(kit); }
+      persist();
+      toast(`Added ${changed} posting${changed === 1 ? '' : 's'} from your other device.`);
+    },
+  });
 }
 
 init();

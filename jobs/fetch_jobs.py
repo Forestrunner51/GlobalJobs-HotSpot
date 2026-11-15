@@ -1,4 +1,5 @@
-"""Collect live job postings that mention the languages in jobs/sources.json (Rust, C++, Go, ...).
+"""Collect live job postings that mention the languages in jobs/sources.json (Rust, C++, Go, ...),
+tagged with the frameworks and cloud tools they mention (React, Spring Boot, AWS, ...).
 
 Writes web/data/jobs.json (the list the site shows) and web/data/jobs-text/*.json (full posting
 text in 32 pieces, loaded only when you open a posting or copy it for apply/jobprep.py).
@@ -9,7 +10,8 @@ Sources, all used through their public APIs:
   Himalayas, The Muse        job search APIs (no key needed)
   Remotive, Remote OK, Jobicy  remote-job feeds; their terms ask that listings name them and link
                              back to their page, which the site does ("via Remote OK")
-  Adzuna                     set ADZUNA_APP_ID and ADZUNA_APP_KEY (free at developer.adzuna.com)
+  Adzuna                     set ADZUNA_APP_ID and ADZUNA_APP_KEY (developer.adzuna.com; free only for evaluation,
+                             with low call limits; ongoing use needs a paid plan)
   USAJobs                    set USAJOBS_API_KEY and USAJOBS_EMAIL (free at developer.usajobs.gov)
 
     python jobs/fetch_jobs.py
@@ -94,8 +96,41 @@ def iso_date(value) -> str | None:
 
 # ---------------------------------------------------------------- keywords
 
+DEFAULT_GROUPS = [{"id": "language", "label": "Languages"}]
+
+
+def keyword_groups(cfg: dict) -> list[dict]:
+    """The rows of filters on the site, in order. A group with "tagOnly" (frameworks, cloud tools)
+    labels postings that match another group but never brings in a posting by itself, so a sales
+    role that mentions AWS stays out. A group with "titleOnly" (roles: Platform, SRE, ...) is
+    matched against job titles only, since nearly every posting says "infrastructure" somewhere;
+    its "titleRequires" / "titleExcludes" patterns keep "Cloud Account Executive" out."""
+    return cfg.get("keywordGroups") or DEFAULT_GROUPS
+
+
+class TitleRules:
+    """Which keywords are matched on the title alone, and what else the title must (not) say."""
+
+    def __init__(self, specs: list[dict], groups: list[dict]):
+        by_id = {g["id"]: g for g in groups}
+        self.names = frozenset(k["name"] for k in specs if by_id.get(k["group"], {}).get("titleOnly"))
+        self.requires, self.excludes = {}, {}
+        for k in specs:
+            g = by_id.get(k["group"], {})
+            if k["name"] in self.names:
+                self.requires[k["name"]] = re.compile(g["titleRequires"], re.I) if g.get("titleRequires") else None
+                self.excludes[k["name"]] = re.compile(g["titleExcludes"], re.I) if g.get("titleExcludes") else None
+
+    def allows(self, word: str, title: str) -> bool:
+        need, bar = self.requires.get(word), self.excludes.get(word)
+        return (not need or bool(need.search(title))) and not (bar and bar.search(title))
+
+
+NO_TITLE_RULES = TitleRules([], [])
+
+
 def keyword_spec(entry: str | dict) -> dict:
-    """A keyword from sources.json: a plain name, or {"name", "pattern"?, "caseSensitive"?}.
+    """A keyword from sources.json: a plain name, or {"name", "pattern"?, "caseSensitive"?, "group"?}.
 
     Patterns are shared with the site (for highlighting), so they must work in both Python and
     JavaScript: no inline flags, and only fixed-width lookbehind.
@@ -110,7 +145,8 @@ def keyword_spec(entry: str | dict) -> dict:
     query = entry.get("query", name)
     return {"name": name, "pattern": pattern, "flags": "" if entry.get("caseSensitive") else "i",
             "queries": query if isinstance(query, list) else [query],  # what to send to keyword-search APIs
-            "aliases": entry.get("aliases", [])}  # former names, so old links on the site still work
+            "aliases": entry.get("aliases", []),  # former names, so old links on the site still work
+            "group": entry.get("group", "language")}
 
 
 def compile_keyword(spec: dict) -> re.Pattern:
@@ -122,13 +158,20 @@ def _snippet(text: str, m: re.Match) -> str:
     return ("…" if a else "") + text[a:b].replace("\n", " ").strip() + ("…" if b < len(text) else "")
 
 
-def match_keywords(title: str, text: str, keywords: dict[str, re.Pattern]) -> dict | None:
+def match_keywords(title: str, text: str, keywords: dict[str, re.Pattern],
+                   tag_only: frozenset[str] = frozenset(), roles: TitleRules = NO_TITLE_RULES) -> dict | None:
     """Which keywords a posting mentions, which are in the title, how often each appears in the
-    text, and a snippet around each keyword's first mention."""
+    text, and a snippet around each keyword's first mention. None unless at least one keyword
+    outside tag_only matches."""
     found, in_title, mentions, snippets = [], [], {}, {}
     for word, rx in keywords.items():
         t_hit = bool(rx.search(title))
-        hits = list(rx.finditer(text))
+        if word in roles.names:  # a role: the title has to say it
+            if not (t_hit and roles.allows(word, title)):
+                continue
+            hits = []
+        else:
+            hits = list(rx.finditer(text))
         if not (t_hit or hits):
             continue
         found.append(word)
@@ -137,11 +180,15 @@ def match_keywords(title: str, text: str, keywords: dict[str, re.Pattern]) -> di
         mentions[word] = len(hits)
         if hits:
             snippets[word] = _snippet(text, hits[0])
-    if not found:
+    if all(w in tag_only for w in found):
         return None
-    # A posting listing ten languages doesn't need ten snippets: keep the most central ones.
-    central = sorted(snippets, key=lambda w: (w not in in_title, -mentions[w]))[:SNIPPETS_PER_JOB]
+    # A posting listing ten languages doesn't need ten snippets: keep the most central ones,
+    # languages before tags.
+    central = sorted(snippets, key=lambda w: (w in tag_only, w not in in_title, -mentions[w]))[:SNIPPETS_PER_JOB]
     snippets = {w: snippets[w] for w in central}
+    if not snippets and text:  # matched on the title alone: show how the posting opens
+        opening = text[:2 * SNIPPET_CHARS].replace("\n", " ").strip()
+        snippets[found[0]] = opening + ("…" if len(text) > 2 * SNIPPET_CHARS else "")
     return {"keywords": found, "inTitle": in_title, "mentions": mentions, "snippets": snippets}
 
 
@@ -189,6 +236,31 @@ def required_years(text: str) -> int | None:
     n = first.group(1).lower()
     years = _NUM_WORDS.get(n, None) if not n.isdigit() else int(n)
     return years if years is not None and years <= 25 else None
+
+
+# ---------------------------------------------------------------- pay
+
+_AMOUNT = r"(\d{2,3},\d{3}|\d{2,3}(?:\.\d)?\s?[kK])(?:\.\d{2})?"
+# "$150,000 - $200,000", "$150K–$200K", "USD 150,000 to 200,000", "$120,000.00 — $180,000.00 USD".
+# Pay-transparency laws put a range like this in most US postings even when the board's API has no
+# salary field. Hourly rates and one-off figures ("$50,000 sign-on bonus") aren't ranges, so they don't match.
+PAY_RANGE = re.compile(rf"(?:\$|USD\s?)\s?{_AMOUNT}\s*(?:USD\s*)?(?:-|–|—|to|and)\s*(?:\$|USD\s?)?\s?{_AMOUNT}", re.I)
+PAY_MIN, PAY_MAX = 30_000, 900_000  # outside this it's a bonus, a budget or a revenue figure
+
+
+def _amount(s: str) -> int:
+    s = s.strip().lower().replace(",", "")
+    return int(float(s.rstrip("k ").strip()) * 1000) if s.endswith("k") else int(float(s))
+
+
+def salary_from_text(text: str) -> str | None:
+    """The first annual pay range stated in the posting, as "$150k–$200k"."""
+    for m in PAY_RANGE.finditer(text):
+        lo, hi = _amount(m.group(1)), _amount(m.group(2))
+        if PAY_MIN <= lo <= hi <= PAY_MAX and hi <= lo * 4:
+            lo, hi = round(lo / 1000), round(hi / 1000)
+            return f"${lo}k" if lo == hi else f"${lo}k–${hi}k"
+    return None
 
 
 # ---------------------------------------------------------------- locations
@@ -561,14 +633,37 @@ def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
     """Keyword search over Himalayas' remote jobs, limited to roles open to US residents.
     `pages` (20 jobs each) caps every search; `pagesPerKeyword` raises it for languages that
     Himalayas has many more of than the company boards do (C#/.NET)."""
-    wait = paced(cfg.get("secondsBetweenCalls", 0.4))
+    wait = paced(cfg.get("secondsBetweenCalls", 1.0))
     out = []
+    waited = False
     for word, query in queries:
         for page in range(1, cfg.get("pagesPerKeyword", {}).get(word, cfg.get("pages", 10)) + 1):
             q = urllib.parse.urlencode({"q": query, "country": cfg.get("country", "US"), "page": page})
+            url = f"https://himalayas.app/jobs/api/search?{q}"
             wait()
             try:
-                data = get_json(f"https://himalayas.app/jobs/api/search?{q}")
+                try:
+                    data = get_json(url)
+                except urllib.error.HTTPError as e:
+                    if e.code != 429:
+                        raise
+                    # Too many requests: every later search would fail too. Wait once; if it's
+                    # still refused, stop here and let main() keep last run's postings.
+                    if waited:
+                        log(f"  Himalayas: rate limited again at {query!r}; stopping with {len(out)} postings")
+                        CUT_SHORT.add("himalayas")
+                        return out
+                    waited = True
+                    log(f"  Himalayas: rate limited at {query!r}; waiting {RATE_LIMIT_WAIT}s")
+                    time.sleep(RATE_LIMIT_WAIT)
+                    data = get_json(url)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    log(f"  Himalayas: still rate limited at {query!r}; stopping with {len(out)} postings")
+                    CUT_SHORT.add("himalayas")
+                    return out
+                log(f"  Himalayas: {query!r} page {page} failed ({e}); moving on")
+                break
             except Exception as e:  # noqa: BLE001 - keep the other searches' results
                 log(f"  Himalayas: {query!r} page {page} failed ({e}); moving on")
                 break
@@ -688,6 +783,12 @@ class SkipSource(Exception):
     pass
 
 
+# Sources that stopped early this run (rate limited). Their list is incomplete, so postings they
+# returned last run are kept rather than counted as closed.
+CUT_SHORT: set[str] = set()
+RATE_LIMIT_WAIT = 30  # seconds to wait once after an HTTP 429 before giving up on the source
+
+
 # ---------------------------------------------------------------- assembly
 
 def nearest_metro(index: MetroIndex, lat, lng, max_km: float = 60) -> str | None:
@@ -707,12 +808,13 @@ def nearest_metro(index: MetroIndex, lat, lng, max_km: float = 60) -> str | None
     return best
 
 
-def finalize(raw: list[dict], source: str, keywords: dict[str, re.Pattern], index: MetroIndex):
+def finalize(raw: list[dict], source: str, keywords: dict[str, re.Pattern], index: MetroIndex,
+             tag_only: frozenset[str] = frozenset(), roles: TitleRules = NO_TITLE_RULES):
     jobs, texts = [], {}
     for j in raw:
         text = j.pop("text", "") or ""
         query = j.pop("query", None)
-        hit = match_keywords(j["title"], text, keywords)
+        hit = match_keywords(j["title"], text, keywords, tag_only, roles)
         if not hit and query:
             # Search APIs matched the keyword on text they don't return in full; trust them.
             hit = {"keywords": [query], "inTitle": [], "mentions": {query: 1}, "snippets": {query: text[:2 * SNIPPET_CHARS]}}
@@ -728,6 +830,8 @@ def finalize(raw: list[dict], source: str, keywords: dict[str, re.Pattern], inde
                 loc["states"] = loc["states"] or [index.home_state[rid]]
         if j.get("applyUrl") == j.get("url"):
             j.pop("applyUrl")  # the site falls back to url
+        if not j.get("salary"):
+            j["salary"] = salary_from_text(text)
         job = {"id": j["id"], "source": source, "location": "",
                **{k: v for k, v in j.items() if k != "id" and v not in (None, "")},
                **loc, **hit, "level": classify_level(j["title"]), "years": required_years(text)}
@@ -771,12 +875,15 @@ def previous_text(out: Path, ids: set[str]) -> dict[str, str]:
 
 
 def dedupe(jobs: list[dict]) -> list[dict]:
-    seen, out = set(), []
+    """Drop repeats: the same id (a search API returns a posting once per keyword it matches, and a
+    carried-over posting may also be fetched fresh), or the same company, title and location."""
+    seen, ids, out = set(), set(), []
     for j in jobs:
-        key = (j["company"].lower(), j["title"].lower(), j.get("location", "").lower())
-        if key in seen:
+        key = (j["company"].strip().lower(), j["title"].strip().lower(), j.get("location", "").strip().lower())
+        if key in seen or j["id"] in ids:
             continue
         seen.add(key)
+        ids.add(j["id"])
         out.append(j)
     return out
 
@@ -828,10 +935,15 @@ def main() -> int:
     specs = [keyword_spec(k) for k in (args.keywords or cfg.get("keywords") or ["Rust"])]
     words = [k["name"] for k in specs]
     keywords = {k["name"]: compile_keyword(k) for k in specs}
+    groups = keyword_groups(cfg)
+    tag_only = frozenset(k["name"] for k in specs
+                         if any(g["id"] == k["group"] and g.get("tagOnly") for g in groups))
+    roles = TitleRules(specs, groups)
     index = MetroIndex(json.loads(METROS.read_text()))
 
     # Every fetch is an independent (source, label, thunk); failures are reported, never fatal.
-    queries = [(k["name"], q) for k in specs for q in k["queries"]]
+    # Search APIs are asked only for keywords that bring in postings; tags are matched on the text.
+    queries = [(k["name"], q) for k in specs if k["name"] not in tag_only for q in k["queries"]]
     tasks = [(c["ats"], c["name"], lambda c=c: BOARD_FETCHERS[c["ats"]](c)) for c in cfg.get("companies", [])]
     hn = cfg.get("hackerNews", True)
     if hn:
@@ -884,7 +996,12 @@ def main() -> int:
             elif source != "hn" and not err.startswith("skipped"):
                 carried += [j for j in prev_jobs.values() if j["source"] == source]
             continue
-        jobs, texts = finalize(raw, source, keywords, index)
+        jobs, texts = finalize(raw, source, keywords, index, tag_only, roles)
+        if source in CUT_SHORT:
+            fresh = {j["id"] for j in jobs}
+            kept = [j for j in prev_jobs.values() if j["source"] == source and j["id"] not in fresh]
+            carried += kept
+            s["problems"].append(f"{label}: rate limited part-way; kept {len(kept)} postings from the last run")
         s["boards"] += 1
         s["scanned"] += len(raw)
         s["matched"] += len(jobs)
@@ -927,6 +1044,7 @@ def main() -> int:
         "trackedSince": tracked_since,
         "changes": changes,
         "keywords": specs,
+        "keywordGroups": groups,
         "textShards": TEXT_SHARDS,
         "sources": list(sources.values()),
         "jobs": all_jobs,

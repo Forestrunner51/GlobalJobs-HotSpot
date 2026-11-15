@@ -39,7 +39,7 @@ also used by the site for highlighting, so they must be valid in both Python and
 | Himalayas | Keyword search of remote jobs open to US residents, up to 200 per language | None |
 | The Muse | Software Engineering and Data Science jobs in about 30 US tech cities | None |
 | Remotive, Remote OK, Jobicy | Remote developer job feeds (their terms: name them and link to their listing; the site does) | None |
-| Adzuna | Keyword search across US job sites, 5 pages of 50 per language, spaced 2.5 s apart | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` (free at developer.adzuna.com) |
+| Adzuna | Keyword search across US job sites, 5 pages of 50 per language, spaced 2.5 s apart | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` (developer.adzuna.com: the free key is for evaluation and its limits are lower than a twice-daily run uses; ongoing use needs a paid plan) |
 | USAJobs | Keyword search, federal jobs | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` (free at developer.usajobs.gov) |
 
 Sources without keys are skipped and listed as skipped in the sidebar. A failing board is reported
@@ -60,6 +60,12 @@ How postings are matched and placed:
   in its metro's main state (a Washington, DC metro posting counts as DC unless it says Reston, VA).
 - Experience: level (Intern to Manager) comes from the job title, and years from the first phrase
   like "5+ years of experience". About half of postings state years.
+- Pay: the board's own salary field when there is one (Ashby, Himalayas, Remote OK, Jobicy),
+  otherwise the first annual range written in the posting ("$150,000 - $200,000", "$150K–$200K").
+  Hourly rates, bonuses and anything outside $30k–$900k are ignored. The site has an
+  "Only postings that list pay" filter.
+- Duplicates are dropped by posting id (a search API returns a posting once per keyword it matches)
+  and by company, title and location.
 - Adzuna and USAJobs return only part of each posting's text, so their results are trusted as
   matches even when the returned snippet doesn't include the keyword.
 
@@ -101,12 +107,18 @@ every run. The Pages workflow downloads the live site's copy, refreshes it, and 
 
 Nothing on the site or in `apply/` submits an application. The tools cut the time around it:
 
-- **☆ Save / Not interested / Mark applied** on each posting. **My applications** shows Saved, Applied
+- **Match my resume** (postings tab): add a resume and each posting shows a match percent and
+  the skills you lack, with a "Best for my resume" sort and a one-tap filter to your languages.
+  The file is read in the browser. Only the names of the tracked skills it mentions and your contact
+  details (name, email, phone, links, city) are kept, in localStorage; the text isn't stored.
+  **Fill apply kit** drops those contact details into the kit's empty fields for you to check.
+- **☆ Save / Not interested / Mark applied** on each posting. Applying and hiding show an Undo. **My applications** shows Saved, Applied
   and Hidden lists; applied and hidden postings leave the main list. Follow-ups come due 6 days after
   applying. Saved postings that disappear from the data are shown as "no longer listed".
 - **Apply kit**: your standard form answers (name, email, links, work authorization, salary, "how did
   you hear", saved paragraphs), entered once. **Apply** opens the employer's form in a new tab and the
-  kit beside it, with a Copy button per answer and **Mark as applied**.
+  kit beside it, with a Copy button per answer, **Copy all answers** and **Mark as applied**. When
+  you come back to the tab it asks whether you submitted, and marks the posting applied or saves it.
 - **Batch prep**: **Download saved for prep** saves your shortlist (full posting text included), and
   `apply/jobprep.py batch <file>` drafts a memo, email and form answers for each, after confirming.
 - **With the Autofill extension** (`extension/`, see its README): **Apply to saved with Autofill**
@@ -115,7 +127,17 @@ Nothing on the site or in `apply/` submits an application. The tools cut the tim
   (**Application history**), marks postings applied here when it sees you submit, and records
   postings you mark applied here. The buttons only appear when the extension is installed.
 - Keyboard: `j`/`k` move, `s` save, `a` apply, `p` copy for prep, `r` read, `h` hide, `Esc` close kit.
+- **Send my list to another device**: makes a link that carries your saved postings and kit answers
+  in its `#fragment` (deflated, base64url), which browsers don't send to any server. Open it on your
+  phone or laptop and confirm; for a posting on both devices the more recently changed entry wins,
+  and kit answers only fill blanks. Anyone with the link gets the list, so send it only to yourself.
 - Export CSV, back up and restore. Everything is in this browser's localStorage, never uploaded.
+
+On a phone (760px and narrower) the postings list comes first. A bar at the bottom opens the
+filters as a full-screen drawer, shows your saved postings, and unfolds the map, which stays off
+until asked for so the globe isn't built on every visit. The apply kit is a bottom sheet. Terminal
+steps (prep, keyboard shortcuts) are hidden there. The site has a web manifest and icon, so
+"Add to Home Screen" gives it its own icon and opens on the postings tab.
 
 The Pages workflow fetches fresh postings before every deploy and at 00:00 and 12:00 UTC. Add the
 optional keys as repository secrets with the same names. GitHub only runs scheduled workflows from
@@ -217,14 +239,15 @@ The page's Content Security Policy allows only same-origin scripts and connectio
 | `resume.js` | PDF/DOCX/TXT text extraction in the browser, including detection of scanned (image-only) PDFs. |
 | `state.js` | Selected occupations, metric, floor, metro, tab and job filters kept in the URL. |
 | `jobs.js` | Job postings: filters, per-metro counts for the map, and the text handed to `jobprep.py`. |
-| `tracker.js` | Saved/applied/hidden postings, follow-ups, apply kit, CSV/backup and batch-prep files (localStorage only). |
+| `tracker.js` | Saved/applied/hidden postings, follow-ups, apply kit, CSV/backup, batch-prep files and the device-transfer link (localStorage only). |
+| `profile.js` | Resume on the postings tab: tracked skills it mentions, contact details for the apply kit, and each posting's match percent. |
 
 Add `?nowebgl` to any URL to force the fallback view.
 
 ### Encoding
 
 - LQ uses a fixed log scale from 0.5× to 8×, shown by both marker height or size and color
-  (the upper range of viridis). Color is never the only cue.
+  (a plum-to-gold ramp that only gets lighter). Color is never the only cue.
 - With several occupations selected, each metro gets one marker at the maximum LQ across the
   selection, or the total jobs in "Number of jobs" mode. The tooltip breaks down the parts.
 - Default employment floor is 50 jobs for LQ ranking. The globe shows at most 300 markers with
@@ -235,8 +258,8 @@ Add `?nowebgl` to any URL to force the fallback view.
 ## Tests
 
 ```sh
-node --test tests/js/*.test.mjs                 # ranking, matching, search, URL state, scale, job filters
-python3 -m unittest tests/test_fetch_jobs.py   # job keyword, location and Hacker News parsing
+node --test tests/js/*.test.mjs                 # ranking, matching, search, URL state, scale, job filters, resume match, device transfer
+python3 -m unittest tests/test_fetch_jobs.py   # job keyword, location, pay and Hacker News parsing
 .venv/bin/python -m unittest tests/test_jobprep.py   # application prep, with Claude stubbed out
 ```
 
@@ -270,7 +293,8 @@ Rendering layer:
 - Suppressed estimates are shown as "no data", visually distinct from low values.
 - Resume privacy: files are read with the File API, parsed by vendored code, and never included
   in any request. The CSP enforces `connect-src 'self'`. If server-side processing is ever added,
-  this copy must change too.
+  this copy must change too. The postings tab keeps the skill names and contact details found in
+  the resume in localStorage (the page says so next to both upload boxes); the text is not kept.
 
 ## Not built yet
 

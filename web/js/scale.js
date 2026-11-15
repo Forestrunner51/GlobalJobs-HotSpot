@@ -1,9 +1,9 @@
 import { fmtCompact } from './format.js';
 
-// Upper portion of viridis: perceptually ordered, colorblind-safe, and every
-// step stays visible against the dark globe. Height/radius carry the same value.
-export const RAMP = ['#3e4a89', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'];
-export const NO_DATA_COLOR = '#8b929c';
+// Plum to pale gold, one hue sweep that only ever gets lighter: ordered for every kind of color
+// vision, and every step stays visible against the dark globe. Height/radius carry the same value.
+export const RAMP = ['#8f2d63', '#b23557', '#cf4a44', '#e56a3a', '#f08c3d', '#f6ad4f', '#fbd277', '#fff1b8'];
+export const NO_DATA_COLOR = '#9a917e';
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 

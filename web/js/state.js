@@ -28,12 +28,15 @@ export function readState(search = location.search) {
     usState: US_STATE.test(p.get('st') || '') ? p.get('st') : null,
     langs: [...new Set((p.get('lang') || '').split(',').filter((l) => LANG.test(l)))],
     mine: ['saved', 'applied', 'hidden'].includes(p.get('mine')) ? p.get('mine') : null,
+    sort: ['new', 'match'].includes(p.get('sort')) ? p.get('sort') : 'relevance',
+    pay: p.get('pay') === '1',
   };
 }
 
 export function stateToSearch({
   occ, metric, floor, metro, mode = 'occ', q = '', where = 'all', focus = false, work = 'any', fresh = false,
   levels = [], maxYears = null, yearsKnown = false, usState = null, langs = [], mine = null,
+  sort = 'relevance', pay = false,
 }) {
   const p = new URLSearchParams();
   if (occ.length) p.set('occ', occ.join(','));
@@ -52,6 +55,8 @@ export function stateToSearch({
   if (usState) p.set('st', usState);
   if (langs.length) p.set('lang', langs.join(','));
   if (mine) p.set('mine', mine);
+  if (sort !== 'relevance') p.set('sort', sort);
+  if (pay) p.set('pay', '1');
   const s = p.toString().replace(/%2C/g, ',');
   return s ? `?${s}` : '';
 }

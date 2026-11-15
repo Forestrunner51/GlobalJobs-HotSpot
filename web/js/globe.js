@@ -37,7 +37,7 @@ export async function createGlobe(container, { narrow, onMetroClick, tooltipHtml
     // Smaller texture for phones: less download and less VRAM.
     .globeImageUrl(narrow ? 'img/earth-dark-1k.jpg' : 'img/earth-dark-2k.jpg')
     .showAtmosphere(true)
-    .atmosphereColor('#4d6d91')
+    .atmosphereColor('#a07a4e')
     .atmosphereAltitude(0.12)
     .showGraticules(false)
     // One merged geometry = one draw call. Picking is done from globe coordinates instead.
@@ -65,7 +65,7 @@ export async function createGlobe(container, { narrow, onMetroClick, tooltipHtml
 
   // Dim the landmass: the rest of the world has no data and should read as inert.
   const material = globe.globeMaterial();
-  material.color?.set?.('#9aa4b5');
+  material.color?.set?.('#c2b49a');
 
   const controls = globe.controls();
   controls.autoRotate = false; // an auto-rotating globe never lets the render loop idle

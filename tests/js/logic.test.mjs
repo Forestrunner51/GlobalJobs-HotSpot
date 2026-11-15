@@ -99,12 +99,12 @@ test('search finds occupations by programming language', () => {
 
 test('URL state round-trips and rejects junk', () => {
   const s = { occ: ['15-1252', '17-2171'], metric: 'employment', floor: 100, metro: '26420',
-    mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null };
+    mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false };
   assert.deepEqual(readState(stateToSearch(s)), s);
-  const jobs = { ...s, mode: 'jobs', q: 'backend', where: 'us', work: 'hybrid', fresh: true, focus: true, levels: ['entry', 'mid'], maxYears: 3, yearsKnown: true, usState: 'WA', langs: ['C++', 'Go', 'C#'], mine: 'applied' };
+  const jobs = { ...s, mode: 'jobs', q: 'backend', where: 'us', work: 'hybrid', fresh: true, focus: true, levels: ['entry', 'mid'], maxYears: 3, yearsKnown: true, usState: 'WA', langs: ['C++', 'Go', 'C#'], mine: 'applied', sort: 'new', pay: true };
   assert.deepEqual(readState(stateToSearch(jobs)), jobs);
   assert.deepEqual(readState('?occ=bad,15-1252&metric=x&floor=-3&metro=abc&mode=x&where=moon'),
-    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null, mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null });
+    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null, mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false });
   assert.equal(readState('?where=remote').work, 'remote'); // links from before the work-style filter
   assert.deepEqual(readState('?lvl=senior,bogus&yrs=abc').levels, ['senior']);
   assert.equal(readState('?st=wa').usState, null);
@@ -119,7 +119,7 @@ test('LQ color scale uses a fixed log domain', () => {
 });
 
 import {
-  filterJobs, jobMarkers, isFocused, strengthTags, jobSnippet, sortJobs, langCounts, textShard,
+  filterJobs, langsByGroup, jobMarkers, isFocused, strengthTags, jobSnippet, sortJobs, langCounts, textShard,
   postingForPrep, safeUrl, levelCounts, stateCounts, workCounts, isNew,
 } from '../../web/js/jobs.js';
 
@@ -169,6 +169,26 @@ test('work style and new postings', () => {
   const meta = { generated: '2026-10-19T12:00:00+00:00', trackedSince: '2026-09-30' };
   assert.deepEqual(ids({ fresh: true, meta }), ['r', 'rh']); // h is 18 days old; o and x were in the first run
   assert.equal(isNew(jobs[0], { ...meta, trackedSince: '2026-10-19' }), false);
+});
+
+test('filterJobs: any pick within a row, every row', () => {
+  const groupOf = { Rust: 'language', Go: 'language', Python: 'language', React: 'framework', AWS: 'cloud' };
+  const jobs = [
+    { id: 'a', keywords: ['Rust', 'AWS'] },
+    { id: 'b', keywords: ['Go', 'React', 'AWS'] },
+    { id: 'c', keywords: ['Python', 'React'] },
+  ].map((j) => ({ title: '', company: '', location: '', regionIds: [], inTitle: [], mentions: {}, ...j }));
+  const ids = (langs) => filterJobs(jobs, { langs, groupOf }).map((j) => j.id);
+  assert.deepEqual(ids(['Rust', 'Go']), ['a', 'b']);
+  assert.deepEqual(ids(['Rust', 'Go', 'AWS']), ['a', 'b']);
+  assert.deepEqual(ids(['Rust', 'Go', 'React']), ['b']);
+  assert.deepEqual(ids(['React', 'AWS']), ['b']);
+  assert.deepEqual(langsByGroup(['Go', 'React', 'Rust'], groupOf), [['Go', 'Rust'], ['React']]);
+  // Without groups every pick is one row, as before.
+  assert.deepEqual(filterJobs(jobs, { langs: ['Rust', 'React'] }).map((j) => j.id), ['a', 'b', 'c']);
+  // A pill counts what it would show in its row alongside the other rows' picks.
+  assert.deepEqual(langCounts(jobs, ['Rust', 'Python', 'React', 'AWS'], { langs: ['Go', 'React'], groupOf }),
+    [['Rust', 0], ['Python', 1], ['React', 1], ['AWS', 1]]);
 });
 
 test('filterJobs: experience level and years', () => {
@@ -273,4 +293,90 @@ test('tracker: extension job keys and merging applications from the extension', 
   assert.equal(entries['wd-1'].applied, '2026-11-02');
   assert.equal(entries['gone-1'].job.company, 'Closed Co');
   assert.equal(mergeApplied(entries, [{ key: 'greenhouse:555', applied: '2026-11-05' }], jobs).added, 0);
+});
+
+test('sortJobs: newest, and best fit for a resume', async () => {
+  const { sortJobs: sort, filterJobs: filter } = await import('../../web/js/jobs.js');
+  const { matchJob } = await import('../../web/js/profile.js');
+  const job = (id, keywords, posted, extra = {}) => ({
+    id, keywords, posted, title: '', company: '', location: '', regionIds: [], inTitle: [],
+    mentions: Object.fromEntries(keywords.map((k) => [k, 1])), ...extra,
+  });
+  const jobs = [
+    job('old-rust', ['Rust'], '2026-01-01', { inTitle: ['Rust'] }),
+    job('new-mixed', ['Rust', 'Kafka', 'Go'], '2026-03-01'),
+    job('mid-go', ['Go', 'AWS'], '2026-02-01', { salary: '$150k–$200k' }),
+  ];
+  assert.deepEqual(sort(jobs, ['Rust']).map((j) => j.id), ['old-rust', 'new-mixed', 'mid-go']);
+  assert.deepEqual(sort(jobs, ['Rust'], { by: 'new' }).map((j) => j.id), ['new-mixed', 'mid-go', 'old-rust']);
+  const mine = new Set(['Go', 'AWS']);
+  assert.deepEqual(sort(jobs, [], { by: 'match', matchOf: (j) => matchJob(j, mine) }).map((j) => j.id),
+    ['mid-go', 'new-mixed', 'old-rust']);
+  // Of two complete matches, the posting that asks for more of what you have comes first.
+  const full = [job('one', ['Go'], '2026-03-01'), job('two', ['Go', 'AWS'], '2026-01-01')];
+  assert.deepEqual(sort(full, [], { by: 'match', matchOf: (j) => matchJob(j, mine) }).map((j) => j.id), ['two', 'one']);
+  // Without a resume, "match" falls back to relevance rather than shuffling.
+  assert.deepEqual(sort(jobs, ['Rust'], { by: 'match' }).map((j) => j.id), ['old-rust', 'new-mixed', 'mid-go']);
+  assert.deepEqual(filter(jobs, { pay: true }).map((j) => j.id), ['mid-go']);
+  const s = readState('?mode=jobs&sort=match&pay=1');
+  assert.equal(s.sort, 'match');
+  assert.equal(s.pay, true);
+  assert.equal(stateToSearch(s), '?mode=jobs&sort=match&pay=1');
+  assert.equal(readState('?sort=junk').sort, 'relevance');
+});
+
+test('resume profile: skills, contact details, kit filling and match percent', async () => {
+  const { resumeSkills, resumeContact, fillKitFields, matchJob } = await import('../../web/js/profile.js');
+  const resume = `ADA LOVELACE
+San Francisco, CA | ada.lovelace@example.com | (415) 555-0134
+linkedin.com/in/ada-lovelace · github.com/adal · https://ada.dev
+
+Software engineer at Analytical Engines, Austin, TX. Built services in Rust and Python on AWS.
+Trusted by 40 teams.`;
+  const regexes = new Map([
+    ['Rust', /(?<![A-Za-z0-9])Rust(?![A-Za-z0-9])/gi], ['Python', /(?<![A-Za-z0-9])Python(?![A-Za-z0-9])/gi],
+    ['Go', /[Gg]olang/g], ['AWS', /(?<![A-Za-z0-9])AWS(?![A-Za-z0-9])/gi],
+  ]);
+  assert.deepEqual(resumeSkills(resume, regexes), ['Rust', 'Python', 'AWS']);
+  assert.deepEqual(resumeSkills(resume, regexes), ['Rust', 'Python', 'AWS'], 'global regexes are reset between calls');
+  assert.deepEqual(resumeContact(resume), {
+    name: 'Ada Lovelace', email: 'ada.lovelace@example.com', phone: '(415) 555-0134',
+    linkedin: 'https://linkedin.com/in/ada-lovelace', github: 'https://github.com/adal',
+    portfolio: 'https://ada.dev', location: 'San Francisco, CA',
+  });
+  assert.deepEqual(resumeContact('Resume\nSenior Software Engineer\nno contact details here'), {});
+
+  const { fields, filled } = fillKitFields({ name: 'A. Lovelace', email: ' ' }, { name: 'Ada Lovelace', email: 'a@b.co', phone: '555' });
+  assert.deepEqual(fields, { name: 'A. Lovelace', email: 'a@b.co', phone: '555' });
+  assert.deepEqual(filled, ['email', 'phone']);
+
+  const job = { keywords: ['Rust', 'Kafka', 'AWS'], inTitle: ['Rust'], mentions: { Rust: 4, Kafka: 2, AWS: 1 } };
+  assert.deepEqual(matchJob(job, ['Rust', 'AWS']), { percent: 67, weight: 4, have: ['Rust', 'AWS'], missing: ['Kafka'] });
+  assert.equal(matchJob(job, []).percent, 0);
+  assert.equal(matchJob({ keywords: [] }, ['Rust']), null);
+});
+
+test('tracker: moving the list to another device', async () => {
+  const { encodeTransfer, decodeTransfer, mergeEntries, mergeKit, kitAsText } = await import('../../web/js/tracker.js');
+  const entry = (status, updated, title = 'Engineer') => ({ status, updated, job: { title, company: 'Acme', location: '', url: 'https://a.example/1' } });
+  const laptop = { a: entry('saved', '2026-11-01'), b: entry('applied', '2026-11-05'), c: entry('saved', '2026-11-02', 'Ünïcode — title') };
+  const kit = { fields: { name: 'Ada', email: 'ada@example.com' }, extra: 'A bio.' };
+
+  const code = await encodeTransfer(laptop, kit);
+  assert.match(code, /^[zj]\.[\w-]+$/, 'safe to put after # in a link');
+  assert.deepEqual(await decodeTransfer(code), { entries: laptop, kit });
+  assert.equal(await decodeTransfer(code.slice(0, -9)), null, 'a cut-off link is refused, not half-read');
+  assert.equal(await decodeTransfer('nonsense'), null);
+
+  const phone = { a: entry('applied', '2026-11-03'), b: entry('saved', '2026-11-04'), d: entry('hidden', '2026-11-01') };
+  const { entries, changed } = mergeEntries(phone, { ...laptop, junk: { status: 'weird' }, e: null });
+  assert.equal(entries.a.status, 'applied', 'the phone changed it more recently');
+  assert.equal(entries.b.status, 'applied', 'the laptop changed it more recently');
+  assert.deepEqual(Object.keys(entries).sort(), ['a', 'b', 'c', 'd']);
+  assert.equal(changed, 2);
+
+  assert.deepEqual(mergeKit({ fields: { name: 'Ada L.' }, extra: '' }, kit),
+    { fields: { name: 'Ada L.', email: 'ada@example.com' }, extra: 'A bio.' });
+  assert.deepEqual(mergeKit(kit, null), kit);
+  assert.equal(kitAsText(kit), 'Full name: Ada\nEmail: ada@example.com\nSaved answer 1: A bio.');
 });
