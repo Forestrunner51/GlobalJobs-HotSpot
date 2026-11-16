@@ -17,7 +17,8 @@ const profile = (): Profile => ({
 
 describe('fieldKey', () => {
   it.each([
-    ['First Name*', 'firstName'], ['Preferred First Name', 'preferredName'], ['Last Name', 'lastName'],
+    ['First Name*', 'firstName'], ['Full Legal Name', 'fullName'], ['Legal Name', 'fullName'], ['Name', 'fullName'],
+    ['Where are you currently located?', 'location'], ['Where do you currently reside?', 'location'], ['What is your current location?', 'location'], ['Preferred First Name', 'preferredName'], ['Last Name', 'lastName'],
     ['Email Address', 'email'], ['Phone', 'phone'], ['Phone Device Type', 'phoneType'],
     ['LinkedIn Profile', 'linkedin'],
     ['Would you like to include your LinkedIn profile, personal website or blog?', 'linkedin'],

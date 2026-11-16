@@ -89,11 +89,55 @@ async function lever(doc: Document): Promise<JobInfo> {
   }
 }
 
+/**
+ * Ashby puts the posting in the page as schema.org JobPosting data, on the Overview and the
+ * Application tab alike. The job's address is …/{company}/{id}, with or without /application.
+ */
+function ashby(doc: Document): JobInfo {
+  const url = new URL(doc.location.href);
+  const [, company = '', id = ''] = url.pathname.split('/');
+  // <title>Research Engineer, Post-Training @ Deepgram</title>
+  const [, pageTitle = '', org = ''] = doc.title.match(/^(.+) @ (.+)$/) ?? [];
+  const info: JobInfo = {
+    url: id ? `${url.origin}/${company}/${id}` : url.href,
+    title: textOf(doc.querySelector('.ashby-job-posting-heading')) || meta(doc, 'og:title') || pageTitle,
+    company: org || company,
+    description: meta(doc, 'description').slice(0, MAX_DESCRIPTION),
+    site: 'Ashby',
+  };
+  for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data = JSON.parse(script.textContent ?? '') as {
+        '@type'?: string; title?: string; description?: string; hiringOrganization?: { name?: string };
+        jobLocation?: unknown;
+      };
+      if (data['@type'] !== 'JobPosting') continue;
+      const places = (Array.isArray(data.jobLocation) ? data.jobLocation : [data.jobLocation]) as Array<{ address?: Record<string, string> } | undefined>;
+      const where = places.map((p) => [p?.address?.addressLocality, p?.address?.addressRegion, p?.address?.addressCountry].filter(Boolean).join(', ')).filter(Boolean);
+      const html = new DOMParser().parseFromString(data.description ?? '', 'text/html');
+      // Block tags run together in textContent; a line break after each keeps paragraphs apart.
+      for (const el of html.body.querySelectorAll('p, li, h1, h2, h3, h4, br, div')) el.append('\n');
+      const text = (html.body.textContent ?? '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+      return {
+        ...info,
+        title: data.title || info.title,
+        company: data.hiringOrganization?.name || info.company,
+        location: where.join(' · ') || undefined,
+        description: text.slice(0, MAX_DESCRIPTION) || info.description,
+      };
+    } catch {
+      // Not JSON we can read; the page title and meta tags above still name the job.
+    }
+  }
+  return info;
+}
+
 export async function jobInfo(doc: Document): Promise<JobInfo | null> {
   const site = siteOf(doc.location.hostname);
   if (site === 'Greenhouse') return greenhouse(doc);
   if (site === 'Workday') return workday(doc);
   if (site === 'Lever') return lever(doc);
+  if (site === 'Ashby') return ashby(doc);
   return null;
 }
 
@@ -115,6 +159,8 @@ export function isConfirmation(doc: Document, submittedRecently: boolean): boole
   const site = siteOf(doc.location.hostname);
   if (site === 'Greenhouse' && /\/confirmation\/?$/.test(doc.location.pathname)) return true;
   if (site === 'Lever' && /\/thanks\/?$/.test(doc.location.pathname)) return true;
+  // Ashby swaps the form for a success panel on the same address.
+  if (site === 'Ashby' && submittedRecently && doc.querySelector('.ashby-application-form-success-container')) return true;
   if (!submittedRecently || !THANKS.test(doc.body?.innerText ?? doc.body?.textContent ?? '')) return false;
   return ![...doc.querySelectorAll(SUBMIT_CANDIDATES)].some((el) => isSubmitButton(el) && el.getClientRects().length > 0);
 }

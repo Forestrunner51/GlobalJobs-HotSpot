@@ -13,7 +13,8 @@ const PATTERNS: Array<[AtsId, string, RegExp]> = [
   ['greenhouse', 'Greenhouse', /^https:\/\/((job-)?boards(-api)?\.greenhouse\.io|[\w-]+\.greenhouse\.io\/embed)\/|[?&]gh_jid=\d+/],
   ['lever', 'Lever', /^https:\/\/jobs\.(eu\.)?lever\.co\//],
   ['workday', 'Workday', /^https:\/\/[\w.-]+\.(myworkdayjobs|myworkdaysite)\.com\/|^https:\/\/wd\d+\.myworkday\.com\//],
-  ['ashby', 'Ashby', /^https:\/\/jobs\.ashbyhq\.com\//],
+  // Hosted pages, plus company careers pages that embed the form (?ashby_jid= on their URL).
+  ['ashby', 'Ashby', /^https:\/\/jobs\.ashbyhq\.com\/|[?&]ashby_jid=[0-9a-f-]{36}/i],
   ['icims', 'iCIMS', /^https:\/\/[\w.-]+\.icims\.com\//],
 ];
 
@@ -24,10 +25,10 @@ export function detectAts(url: string | undefined): AtsInfo | null {
 }
 
 /** Systems with a working adapter. Filled in as each phase lands. */
-export const SUPPORTED: ReadonlySet<AtsId> = new Set<AtsId>(['greenhouse', 'workday', 'lever']);
+export const SUPPORTED: ReadonlySet<AtsId> = new Set<AtsId>(['greenhouse', 'workday', 'lever', 'ashby']);
 
 /** Which phase brings each system, for the popup's "not yet" message. */
 export const PLANNED_PHASE: Record<AtsId, number | null> = {
-  greenhouse: 2, lever: 3, workday: 5, ashby: null, icims: null,
+  greenhouse: 2, lever: 3, workday: 5, ashby: 7, icims: null,
 };
 

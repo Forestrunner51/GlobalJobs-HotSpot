@@ -17,8 +17,9 @@ Works in Chrome, Brave and Edge (Manifest V3). Firefox compatibility is kept in 
 | 5 | Workday: one step at a time, you click Next | **Done** (basic, see Limits) |
 
 | 6 | Several resumes, follow-up reminders, queue limits, weekly backup, Claude drafts | **Done** |
+| 7 | Ashby | **Done** |
 
-The popup also recognizes Ashby and iCIMS pages and says filling for them isn't built yet.
+The popup also recognizes iCIMS pages and says filling for them isn't built yet.
 
 ## Using it
 
@@ -42,6 +43,9 @@ the required fields still empty. Fields you already typed in are never changed.
   the form (`?gh_jid=` in the URL).
 - **Lever**: works on `jobs.lever.co` application pages (…/apply). Its location box suggests
   places as you type; pick one from its list if it asks.
+- **Ashby**: works on `jobs.ashbyhq.com` application pages (the **Application** tab). It answers
+  Ashby's Yes/No buttons and picks your city from its location list. Its date pickers and its own
+  "Autofill from resume" box are left alone.
 - **Workday**: sign in and start the application, then click **Fill** on each step. You click
   **Next** yourself.
 
@@ -132,7 +136,7 @@ extension/
       engine.ts             Finds the form's fields and fills them: text, selects, react-select (Greenhouse),
                             dropdown buttons (Workday), yes/no radios, resume upload (tested with happy-dom)
       jobinfo.ts            Job title/company/description from the page (or Workday's job data), confirmation pages
-      fill.ts               Content script on Greenhouse/Workday: Fill, history, submission watch, queued autofill
+      fill.ts               Content script on Greenhouse/Lever/Ashby/Workday: Fill, history, submission watch, queued autofill
       site.ts               Content script on the job site: apply queue and status sync via postMessage
     background.ts           Service worker: apply queue (with limits), follow-up badge, weekly backup, drafting
     draft.ts                Drafts open questions with the Claude API (@anthropic-ai/sdk)
@@ -156,7 +160,7 @@ fields register them, and opens dropdowns the way a click or the arrow key would
 | `downloads` (optional) | Asked for only when you turn on the weekly backup. |
 | `activeTab` | Read the current tab's URL and fill it, only after you click the extension. |
 | `scripting` | Inject the filling script into a company page that embeds a Greenhouse form, when you click **Fill**. |
-| Greenhouse, Lever and Workday sites | Notice when you submit an application, and fill queued tabs by themselves. Nothing is filled there unless you click **Fill** or opened the tab from the apply queue. |
+| Greenhouse, Lever, Ashby and Workday sites | Notice when you submit an application, and fill queued tabs by themselves. Nothing is filled there unless you click **Fill** or opened the tab from the apply queue. |
 
 It also runs on the job site (`forestrunner51.github.io/GlobalJobs-HotSpot`, `localhost`,
 `127.0.0.1`) to connect the two. Showing a page there isn't a permission prompt in Chrome.

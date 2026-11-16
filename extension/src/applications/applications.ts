@@ -53,7 +53,7 @@ function render(): void {
     ? `${all.length} job${all.length === 1 ? '' : 's'}: ${(Object.keys(STATUS_LABEL) as AppStatus[]).filter(count).map((s) => `${count(s)} ${STATUS_LABEL[s].toLowerCase()}`).join(', ')}`
     : '';
   $('#list').innerHTML = shown.length ? shown.map(card).join('')
-    : `<p class="empty">${all.length ? 'Nothing matches.' : 'No applications yet. Fill a Greenhouse or Workday application, or mark a job applied on the job site, and it shows up here.'}</p>`;
+    : `<p class="empty">${all.length ? 'Nothing matches.' : 'No applications yet. Fill a Greenhouse, Lever, Ashby or Workday application, or mark a job applied on the job site, and it shows up here.'}</p>`;
 }
 
 async function change(fn: (a: Applications) => Applications): Promise<void> {

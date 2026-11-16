@@ -23,6 +23,15 @@ describe('appKey', () => {
     expect(appKey('https://acme.wd5.myworkdayjobs.com/External/job/Austin-TX/Engineer_R123/apply/applyManually')).toBe(key);
   });
 
+  it('gives an Ashby job one key on the posting, its application tab and an embedding page', () => {
+    for (const url of [
+      'https://jobs.ashbyhq.com/Acme/DCEA53A5-5650-406d-a154-fad077c4b81b',
+      'https://jobs.ashbyhq.com/acme/dcea53a5-5650-406d-a154-fad077c4b81b/application?utm_source=x',
+      'https://www.acme.com/careers?ashby_jid=dcea53a5-5650-406d-a154-fad077c4b81b',
+    ]) expect(appKey(url)).toBe('ashby:dcea53a5-5650-406d-a154-fad077c4b81b');
+    expect(appKey('https://jobs.ashbyhq.com/acme')).toBe('jobs.ashbyhq.com/acme');
+  });
+
   it('falls back to host and path elsewhere', () => {
     expect(appKey('https://www.example.com/jobs/42/?ref=x')).toBe('example.com/jobs/42');
   });

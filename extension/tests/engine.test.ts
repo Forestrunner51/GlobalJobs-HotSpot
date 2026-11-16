@@ -164,3 +164,76 @@ describe('Lever', () => {
     expect(openQuestions(document, withJob).map((f) => f.label)).toEqual(['Why do you want to work at Acme?']);
   });
 });
+
+describe('Ashby', () => {
+  const entry = (path: string, title: string, inner: string) =>
+    `<div data-field-path="${path}"><label class="_heading_f7 ${/required/.test(inner) ? '_required_f7' : ''} ashby-application-form-question-title" for="${path}">${title}</label>${inner}</div>`;
+  const yesNo = (name: string) => `<div class="ashby-application-form-input-yesno">
+    <button type="button" aria-pressed="false" data-option="yes">Yes</button><button type="button" aria-pressed="false" data-option="no">No</button>
+    <input type="checkbox" tabindex="-1" name="${name}"></div>`;
+
+  beforeEach(() => {
+    setUrl('https://jobs.ashbyhq.com/acme/dcea53a5-5650-406d-a154-fad077c4b81b/application');
+    document.body.innerHTML = `
+      <div class="ashby-application-form-autofill-input-root"><input type="file"><button>Upload file</button></div>
+      ${entry('_systemfield_name', 'Full Legal Name', '<input id="_systemfield_name" type="text" required>')}
+      ${entry('_systemfield_email', 'Email', '<input id="_systemfield_email" type="email" required>')}
+      ${entry('_systemfield_resume', 'Resume', '<input id="_systemfield_resume" type="file" required>')}
+      ${entry('_systemfield_location', 'Current Location', '<div><input id="loc" class="ashby-application-form-input-autocomplete" role="combobox" aria-haspopup="listbox" value=""><button></button></div>')}
+      ${entry('start', 'When can you start a new role?', '<input type="text" class="ashby-application-form-input-date"><i data-required></i>')}
+      ${entry('auth', 'Are you legally authorized to work in the country where this role is located?', yesNo('auth'))}
+      ${entry('visa', 'Will you now or in the future require visa sponsorship?', yesNo('visa'))}
+      ${entry('why', 'What excites you about Acme?', '<textarea id="why"></textarea>')}
+      <fieldset class="ashby-application-form-field-entry"><label class="ashby-application-form-question-title">Gender</label>
+        <input type="radio" name="eeoc_gender" id="g1"><label for="g1">Female</label><input type="radio" name="eeoc_gender" id="g2"><label for="g2">Male</label></fieldset>
+      <button>Submit Application</button>`;
+    // Ashby's Yes/No buttons mark the chosen one with aria-pressed.
+    for (const group of document.querySelectorAll('.ashby-application-form-input-yesno')) {
+      for (const b of group.querySelectorAll('button')) {
+        b.addEventListener('click', () => group.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))));
+      }
+    }
+    // Its location box lists places as you type; picking one puts the full name in the input.
+    const loc = $<HTMLInputElement>('#loc');
+    loc.addEventListener('input', () => {
+      document.getElementById('places')?.remove();
+      if (!loc.value) return;
+      const list = document.createElement('div');
+      list.id = 'places';
+      list.setAttribute('role', 'listbox');
+      loc.setAttribute('aria-controls', 'places');
+      for (const text of ['Austin, Texas, United States', 'Austin, Minnesota, United States']) {
+        const o = document.createElement('div');
+        o.setAttribute('role', 'option');
+        o.textContent = text;
+        o.addEventListener('click', () => { loc.value = text; list.remove(); });
+        list.append(o);
+      }
+      document.body.append(list);
+    });
+  });
+
+  it('fills text, Yes/No buttons and the location list, and attaches the resume to the Resume field only', async () => {
+    const report = await fillPage(document, profile, resume);
+    expect($<HTMLInputElement>('#_systemfield_name').value).toBe('Sam Rivera');
+    expect($<HTMLInputElement>('#_systemfield_email').value).toBe('sam@example.com');
+    expect($<HTMLInputElement>('#loc').value).toBe('Austin, Texas, United States');
+    const pressed = (name: string) => $(`[name="${name}"]`).parentElement!.querySelector('[aria-pressed="true"]')?.textContent;
+    expect(pressed('auth')).toBe('Yes');
+    expect(pressed('visa')).toBe('No');
+    expect($<HTMLInputElement>('#_systemfield_resume').files?.length).toBe(1);
+    expect($<HTMLInputElement>('.ashby-application-form-autofill-input-root input').files?.length ?? 0).toBe(0);
+    expect($<HTMLInputElement>('.ashby-application-form-input-date').value).toBe('');
+    expect($<HTMLInputElement>('#g1').checked || $<HTMLInputElement>('#g2').checked).toBe(false);
+    expect(report).toMatchObject({ site: 'Ashby', resume: 'attached', sensitive: 1 });
+    expect(report?.left).toEqual(['When can you start a new role?']);
+    expect(report?.filled).toHaveLength(5);
+    expect(openQuestions(document, profile).map((f) => f.label)).toEqual(['What excites you about Acme?']);
+  });
+
+  it('leaves a Yes/No question you already answered', async () => {
+    $('[data-option="no"]').click();
+    await fillPage(document, profile, null);
+    expect($('[name="auth"]').parentElement!.querySelector('[aria-pressed="true"]')?.textContent).toBe('No');
+  });
+});

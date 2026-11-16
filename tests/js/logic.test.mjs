@@ -235,7 +235,7 @@ test('per-language tags, snippets, sorting and prep text', () => {
 
 import {
   setStatus, followedUp, followUpDue, counts, entriesWith, toCSV, prepBatch, parseBackup, exportBackup,
-  kitItems, addDays, loadEntries, applicationKey, mergeApplied,
+  kitItems, normalizeKit, addDays, loadEntries, applicationKey, mergeApplied,
 } from '../../web/js/tracker.js';
 
 test('tracker: save, apply, hide and follow-ups', () => {
@@ -269,6 +269,11 @@ test('tracker: CSV, batch file, backup and apply kit', () => {
   assert.equal(parseBackup('not json'), null);
   assert.deepEqual(kitItems(kit), [['Full name', 'Sam Lee'], ['How did you hear about us?', 'Careers page'],
     ['Saved answer 1', 'Short bio.'], ['Saved answer 2', 'Project summary.']]);
+  // The answer bank: titled answers copy under their question; untitled and older ones are numbered.
+  const bank = normalizeKit({ fields: { name: ' Sam ' }, answers: [{ q: ' Why here? ', a: ' The mission. ' }, { q: 'Empty', a: ' ' }, { a: 'No title.' }, null], extra: 'Old one.' });
+  assert.deepEqual(bank.answers, [{ q: 'Why here?', a: 'The mission.' }, { q: '', a: 'No title.' }, { q: '', a: 'Old one.' }]);
+  assert.deepEqual(kitItems(bank), [['Full name', 'Sam'], ['Why here?', 'The mission.'], ['Saved answer 1', 'No title.'], ['Saved answer 2', 'Old one.']]);
+  assert.deepEqual(normalizeKit(null), { fields: {}, answers: [] });
 });
 
 test('tracker: extension job keys and merging applications from the extension', () => {
@@ -276,6 +281,8 @@ test('tracker: extension job keys and merging applications from the extension', 
   assert.equal(applicationKey('https://job-boards.greenhouse.io/stripe/jobs/555/confirmation'), 'greenhouse:555');
   assert.equal(applicationKey('https://acme.wd5.myworkdayjobs.com/en-US/Ext/job/X/Eng_R1/apply'), 'workday:acme.wd5.myworkdayjobs.com/Ext/job/X/Eng_R1');
   assert.equal(applicationKey('https://jobs.lever.co/palantir/6ED76CE8-4156-4b60-b120-403538bd66cd/apply'), 'lever:6ed76ce8-4156-4b60-b120-403538bd66cd');
+  assert.equal(applicationKey('https://jobs.ashbyhq.com/Acme/DCEA53A5-5650-406d-a154-fad077c4b81b/application'), 'ashby:dcea53a5-5650-406d-a154-fad077c4b81b');
+  assert.equal(applicationKey('https://jobs.ashbyhq.com/acme/dcea53a5-5650-406d-a154-fad077c4b81b'), 'ashby:dcea53a5-5650-406d-a154-fad077c4b81b');
   const jobs = [
     { id: 'gh-stripe-555', title: 'Engineer', company: 'Stripe', url: 'https://stripe.com/jobs/listing?gh_jid=555' },
     { id: 'wd-1', title: 'SRE', company: 'Acme', url: 'https://acme.wd5.myworkdayjobs.com/en-US/Ext/job/X/Eng_R1' },
@@ -376,7 +383,11 @@ test('tracker: moving the list to another device', async () => {
   assert.equal(changed, 2);
 
   assert.deepEqual(mergeKit({ fields: { name: 'Ada L.' }, extra: '' }, kit),
-    { fields: { name: 'Ada L.', email: 'ada@example.com' }, extra: 'A bio.' });
+    { fields: { name: 'Ada L.', email: 'ada@example.com' }, answers: [{ q: '', a: 'A bio.' }] });
   assert.deepEqual(mergeKit(kit, null), kit);
+  const mine = { fields: {}, answers: [{ q: 'Why here?', a: 'The mission.' }, { q: '', a: 'A bio.' }] };
+  const theirs = { fields: {}, answers: [{ q: 'why here?', a: 'Older wording.' }, { q: 'Remote?', a: 'Yes.' }], extra: 'A bio.' };
+  assert.deepEqual(mergeKit(mine, theirs).answers, [...mine.answers, { q: 'Remote?', a: 'Yes.' }],
+    'an answer to the same question, or the same text, is not added twice');
   assert.equal(kitAsText(kit), 'Full name: Ada\nEmail: ada@example.com\nSaved answer 1: A bio.');
 });

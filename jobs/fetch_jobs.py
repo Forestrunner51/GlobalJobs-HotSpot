@@ -28,6 +28,7 @@ import hashlib
 import html
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -636,6 +637,11 @@ def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
     wait = paced(cfg.get("secondsBetweenCalls", 1.0))
     out = []
     waited = False
+    if cfg.get("shuffle"):
+        # Himalayas refuses requests part-way through most runs. In a fixed order the same last
+        # searches would never run; shuffled, each run covers a different part and main() keeps
+        # the rest from earlier runs.
+        queries = random.sample(queries, len(queries))
     for word, query in queries:
         for page in range(1, cfg.get("pagesPerKeyword", {}).get(word, cfg.get("pages", 10)) + 1):
             q = urllib.parse.urlencode({"q": query, "country": cfg.get("country", "US"), "page": page})

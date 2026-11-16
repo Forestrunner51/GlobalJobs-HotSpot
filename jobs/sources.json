@@ -51,9 +51,9 @@
     {"name": "DevOps", "group": "role", "query": "devops engineer", "pattern": "\\bDev ?Ops\\b"},
     {"name": "DevSecOps", "group": "security", "query": ["devsecops", "application security", "cloud security"], "pattern": "\\bDev[- ]?Sec[- ]?Ops\\b|\\bSecOps\\b|\\b(?:AppSec|ProdSec)\\b|\\b(?:application|product|cloud|infrastructure|platform|container|Kubernetes|(?:software )?supply[- ]chain) security\\b|\\bsecurity automation\\b|\\b(?:SAST|DAST)\\b"}
   ],
-  "maxAgeDays": {"hn": 60, "adzuna": 45},
+  "maxAgeDays": {"hn": 60, "adzuna": 45, "himalayas": 60},
   "hackerNews": {"months": 3},
-  "himalayas": {"country": "US", "pages": 10, "pagesPerKeyword": {"C# / .NET": 40}},
+  "himalayas": {"country": "US", "shuffle": true, "pages": 10, "pagesPerKeyword": {"C# / .NET": 40}},
   "theMuse": {"categories": ["Software Engineering", "Data Science"], "pages": 30, "locations": ["New York, NY", "San Francisco, CA", "Seattle, WA", "Austin, TX", "Boston, MA", "Los Angeles, CA", "Chicago, IL", "Denver, CO", "Washington, DC", "Atlanta, GA", "San Jose, CA", "Mountain View, CA", "Palo Alto, CA", "Sunnyvale, CA", "San Diego, CA", "Portland, OR", "Dallas, TX", "Houston, TX", "Raleigh, NC", "Pittsburgh, PA", "Philadelphia, PA", "Minneapolis, MN", "Phoenix, AZ", "Salt Lake City, UT", "Miami, FL", "Nashville, TN", "Detroit, MI", "Columbus, OH", "Redmond, WA", "Bellevue, WA", "Arlington, VA", "Reston, VA", "Irvine, CA", "Flexible / Remote"]},
   "remotive": true,
   "remoteOk": true,

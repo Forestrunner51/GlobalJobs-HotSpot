@@ -4,11 +4,11 @@
 // already has a value.
 
 import {
-  type FillReport, isPlaceholder, isSensitive, normalize, pickOption, resolveValue,
+  type FillReport, fieldKey, isPlaceholder, isSensitive, normalize, pickOption, resolveValue,
 } from '../core/fields';
 import type { Profile, StoredResume } from '../core/profile';
 
-type Kind = 'text' | 'textarea' | 'select' | 'combobox' | 'listbox' | 'radio' | 'file';
+type Kind = 'text' | 'textarea' | 'select' | 'combobox' | 'listbox' | 'radio' | 'yesno' | 'file';
 
 export interface Field {
   kind: Kind;
@@ -16,12 +16,15 @@ export interface Field {
   label: string;
   required: boolean;
   radios?: HTMLInputElement[];
+  /** A widget typing can't set (Ashby's date picker): never filled, but listed if required and empty. */
+  manual?: boolean;
 }
 
 export function siteOf(hostname: string): string | null {
   if (/(^|\.)greenhouse\.io$/.test(hostname)) return 'Greenhouse';
   if (/(^|\.)(myworkdayjobs|myworkdaysite|myworkday)\.com$/.test(hostname)) return 'Workday';
   if (/^jobs\.(eu\.)?lever\.co$/.test(hostname)) return 'Lever';
+  if (/^jobs\.ashbyhq\.com$/.test(hostname)) return 'Ashby';
   return null;
 }
 
@@ -31,6 +34,10 @@ const textOf = (el: Element | null | undefined): string => el?.textContent?.repl
 const visible = (el: Element): boolean => el.getClientRects().length > 0;
 const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'number', '']);
 
+/** The question title of the Ashby field an element belongs to; its dropdowns and Yes/No buttons have no id to label. */
+const ashbyTitle = (el: Element): Element | null =>
+  el.closest('[data-field-path], .ashby-application-form-field-entry')?.querySelector('.ashby-application-form-question-title') ?? null;
+
 function rawLabel(el: HTMLElement): string {
   const doc = el.ownerDocument;
   const byIds = (ids: string | null) => (ids ?? '').split(/\s+/).filter(Boolean).map((id) => textOf(doc.getElementById(id))).join(' ');
@@ -39,6 +46,7 @@ function rawLabel(el: HTMLElement): string {
     // Lever wraps each question in li.application-question with an .application-label.
     || textOf(el.closest('.application-question')?.querySelector('.application-label'))
     || textOf(el.closest('label'))
+    || textOf(ashbyTitle(el))
     // Workday wraps each question in a formField-* container with its own label or legend.
     || textOf(el.closest('[data-automation-id^="formField"]')?.querySelector('label, legend'))
     || el.getAttribute('aria-label')
@@ -48,7 +56,7 @@ function rawLabel(el: HTMLElement): string {
 
 function groupLabel(radio: HTMLInputElement): string {
   const group = radio.closest('fieldset, [role="radiogroup"]');
-  return textOf(group?.querySelector('legend'))
+  return textOf(group?.querySelector('legend')) || textOf(ashbyTitle(radio))
     || (group && rawLabel(group as HTMLElement))
     || textOf(radio.closest('.application-question')?.querySelector('.application-label'))
     || textOf(radio.closest('[data-automation-id^="formField"]')?.querySelector('label, legend'))
@@ -61,19 +69,28 @@ const radioText = (r: HTMLInputElement): string =>
 
 function isRequired(el: HTMLElement, raw: string): boolean {
   return (el as HTMLInputElement).required || el.getAttribute('aria-required') === 'true'
-    || /[*✱]/.test(raw) || /\brequired\b/i.test(el.getAttribute('aria-label') ?? '');
+    || /[*✱]/.test(raw) || /\brequired\b/i.test(el.getAttribute('aria-label') ?? '')
+    // Ashby marks a required question on its title (class "_required_…"), not on the input.
+    || /(^|[\s_])required/.test(ashbyTitle(el)?.getAttribute('class') ?? '');
 }
 
 const clean = (raw: string) => raw.replace(/[*✱]/g, '').replace(/\s+/g, ' ').trim();
 
+// Ashby's Yes/No question: two buttons (aria-pressed) and a hidden checkbox, with no radio inputs.
+const ASHBY_YESNO = '.ashby-application-form-input-yesno';
+const yesNoButtons = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('button')];
+
 export function collectFields(doc: Document): Field[] {
   const fields: Field[] = [];
   const groups = new Set<string>();
-  for (const el of doc.querySelectorAll<HTMLElement>('input, textarea, select, button[aria-haspopup="listbox"]')) {
+  for (const el of doc.querySelectorAll<HTMLElement>(`input, textarea, select, button[aria-haspopup="listbox"], ${ASHBY_YESNO}`)) {
     if ((el as HTMLInputElement).disabled || el.getAttribute('aria-hidden') === 'true') continue;
+    // Ashby's "Autofill from resume" box above the form is its own feature, not the Resume field.
+    if (el.closest('.ashby-application-form-autofill-input-root')) continue;
     let kind: Kind;
     let radios: HTMLInputElement[] | undefined;
-    if (el instanceof HTMLButtonElement) kind = 'listbox';
+    if (el.matches(ASHBY_YESNO)) kind = 'yesno';
+    else if (el instanceof HTMLButtonElement) kind = 'listbox';
     else if (el instanceof HTMLSelectElement) kind = 'select';
     else if (el instanceof HTMLTextAreaElement) kind = 'textarea';
     else if (el instanceof HTMLInputElement) {
@@ -91,7 +108,8 @@ export function collectFields(doc: Document): Field[] {
     } else continue;
     if (kind !== 'file' && !visible(el)) continue; // file inputs are usually hidden behind an upload button
     const raw = kind === 'radio' ? groupLabel(el as HTMLInputElement) : rawLabel(el);
-    fields.push({ kind, el, label: clean(raw), required: isRequired(el, raw), radios });
+    const manual = el.classList.contains('ashby-application-form-input-date') || undefined;
+    fields.push({ kind, el, label: clean(raw), required: isRequired(el, raw), radios, manual });
   }
   return fields;
 }
@@ -104,7 +122,10 @@ export function hasValue(f: Field): boolean {
       return !!s.value && !isPlaceholder(s.options[s.selectedIndex]?.text);
     }
     // react-select shows the chosen option in a sibling element, not in the input's value.
-    case 'combobox': return !!f.el.closest('[class*="control"]')?.querySelector('[class*="single-value"], [class*="multi-value"]');
+    // Ashby's own dropdown keeps the chosen option's text in the input.
+    case 'combobox': return !!f.el.closest('[class*="control"]')?.querySelector('[class*="single-value"], [class*="multi-value"]')
+      || (f.el.classList.contains('ashby-application-form-input-autocomplete') && !!(f.el as HTMLInputElement).value.trim());
+    case 'yesno': return yesNoButtons(f.el).some((b) => b.getAttribute('aria-pressed') === 'true' || /(^|[\s_])active/i.test(b.className));
     case 'listbox': return !isPlaceholder(textOf(f.el));
     case 'radio': return !!f.radios?.some((r) => r.checked);
     case 'file': return !!(f.el as HTMLInputElement).files?.length;
@@ -177,6 +198,7 @@ async function fillCombobox(input: HTMLInputElement, value: string): Promise<boo
     return false;
   }
   press(opts[i]);
+  await sleep(150); // the chosen value lands on the next render
   input.blur();
   return true;
 }
@@ -217,6 +239,13 @@ async function fillField(f: Field, value: string): Promise<boolean> {
       radios[i].click();
       return true;
     }
+    case 'yesno': {
+      const buttons = yesNoButtons(f.el);
+      const i = pickOption(buttons.map(textOf), value);
+      if (i < 0) return false;
+      press(buttons[i]);
+      return true;
+    }
     case 'file': return false;
   }
 }
@@ -249,7 +278,7 @@ function mark(f: Field, color = '#2f9e5b'): void {
  * text boxes, and one-line fields whose label is a question. Self-identification is left out.
  */
 export function openQuestions(doc: Document, profile: Profile): Field[] {
-  return collectFields(doc).filter((f) => !hasValue(f) && !isSensitive(f.label) && f.label
+  return collectFields(doc).filter((f) => !f.manual && !hasValue(f) && !isSensitive(f.label) && f.label
     && (f.kind === 'textarea' || (f.kind === 'text' && /\?$/.test(f.label) && f.label.split(' ').length > 5))
     && !resolveValue(f.label, profile, f.kind === 'textarea' ? 'long' : 'short'));
 }
@@ -286,7 +315,7 @@ export async function fillPage(doc: Document, profile: Profile, resume: StoredRe
   }
 
   for (const f of fields) {
-    if (f.kind === 'file' || hasValue(f)) continue;
+    if (f.kind === 'file' || f.manual || hasValue(f)) continue;
     if (isSensitive(f.label)) {
       report.sensitive++;
       continue;
@@ -294,7 +323,10 @@ export async function fillPage(doc: Document, profile: Profile, resume: StoredRe
     const value = resolveValue(f.label, profile, f.kind === 'textarea' ? 'long' : f.kind === 'text' ? 'short' : 'choice');
     if (!value) continue;
     try {
-      if (await fillField(f, value)) {
+      // On Ashby, "Where do you reside?" is sometimes a list of countries, not a place search.
+      const filled = await fillField(f, value)
+        || (site === 'Ashby' && f.kind === 'combobox' && !!profile.country && fieldKey(f.label) === 'location' && await fillField(f, profile.country));
+      if (filled) {
         report.filled.push(f.label);
         mark(f);
       }

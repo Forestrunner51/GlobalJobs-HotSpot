@@ -14,7 +14,7 @@ import {
 import {
   loadEntries, saveEntries, loadKit, saveKit, loadPrefs, savePrefs, setStatus, followedUp, followUpDue, counts,
   entriesWith, toCSV, prepBatch, exportBackup, parseBackup, kitItems, isoToday, KIT_FIELDS, mergeApplied, applicationKey,
-  kitAsText, encodeTransfer, decodeTransfer, mergeEntries, mergeKit, TRANSFER_PARAM, TRANSFER_MAX,
+  kitAsText, normalizeKit, ANSWER_IDEAS, encodeTransfer, decodeTransfer, mergeEntries, mergeKit, TRANSFER_PARAM, TRANSFER_MAX,
 } from './tracker.js';
 import { loadProfile, saveProfile, resumeSkills, resumeContact, fillKitFields, matchJob } from './profile.js';
 
@@ -415,6 +415,7 @@ function syncMobileBar() {
   const c = counts(entries);
   saved.innerHTML = `★ Saved${c.saved ? ` (${fmtInt(c.saved)})` : ''}${c.due ? '<span class="dot" title="Follow-ups due"></span>' : ''}`;
   saved.setAttribute('aria-pressed', String(state.mine === 'saved'));
+  $('#mb-answers').hidden = !jobs;
   const map = $('#mb-map');
   map.hidden = !jobs;
   map.setAttribute('aria-pressed', String(!!prefs.showMap));
@@ -987,13 +988,13 @@ function renderKit() {
     ${items.length ? `<ul class="kit-list">${items.map(([label, value], i) => `<li>
         <span class="kit-label">${escapeHtml(label)}</span><span class="kit-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span>
         <button type="button" class="ghost small" data-copy="${i}">Copy</button></li>`).join('')}</ul>`
-    : `<p class="small">Your apply kit is empty. Fill it in once with the answers forms always ask for${profile?.contact && Object.keys(profile.contact).length ? '; your resume\'s details are ready to drop in' : ''}.</p>`}
+    : `<p class="small">Your answer bank is empty. Fill it in once with the answers forms always ask for${profile?.contact && Object.keys(profile.contact).length ? '; your resume\'s details are ready to drop in' : ''}.</p>`}
     <div class="kit-actions">
       ${asking ? '' : `<button type="button" class="${applied ? 'ghost' : 'btn-primary'}" data-kit-applied>${applied ? 'Applied ✓ (undo)' : 'Mark as applied'}</button>`}
       ${again ? `<a class="ghost small" href="${escapeHtml(again)}" target="_blank" rel="noopener noreferrer" data-kit-again>Open the form again</a>` : ''}
       ${items.length > 1 ? '<button type="button" class="ghost small" data-kit-all>Copy all answers</button>' : ''}
       <button type="button" class="ghost small desk-only" data-kit-prep>Copy posting for prep</button>
-      <button type="button" class="linklike small" data-kit-edit>${items.length ? 'Edit kit' : 'Set up kit'}</button>
+      <button type="button" class="linklike small" data-kit-edit>${items.length ? 'Edit answers' : 'Set up answers'}</button>
     </div>
     <p class="hint desk-only">For tailored answers ("Why this company?", a short cover note), run prep on this posting first; they're in <code>answers.txt</code> in its <code>apply/out/</code> folder.</p>
     <p class="status" role="status" data-kit-msg></p>`;
@@ -1029,10 +1030,16 @@ function openKit(job) {
 async function copyText(text, button) {
   const done = () => {
     if (button) {
-      const label = button.textContent;
+      // Keep the real label aside, so a second tap while it says "Copied" doesn't make that permanent.
+      button.dataset.label ??= button.textContent;
       button.textContent = 'Copied';
       button.classList.add('copied');
-      setTimeout(() => { button.textContent = label; button.classList.remove('copied'); }, 1200);
+      clearTimeout(Number(button.dataset.timer));
+      button.dataset.timer = String(setTimeout(() => {
+        button.textContent = button.dataset.label;
+        button.classList.remove('copied');
+        delete button.dataset.label;
+      }, 1200));
     }
     return true;
   };
@@ -1051,16 +1058,80 @@ async function copyText(text, button) {
   }
 }
 
-/** Edit the apply kit. Empty fields take your resume's contact details, marked so you can check them. */
-function openKitEditor() {
+const qaRow = ({ q = '', a = '' } = {}) => `<div class="qa-row">
+    <input name="q" value="${escapeHtml(q)}" placeholder="Question or title" aria-label="Question or title" autocomplete="off">
+    <textarea name="a" rows="3" placeholder="Your answer" aria-label="Answer">${escapeHtml(a)}</textarea>
+    <button type="button" class="linklike small" data-qa-remove>Remove</button></div>`;
+
+/** Add a blank answer row to the editor (with the question filled in, if given) and put the cursor in it. */
+function addAnswerRow(q = '') {
+  const list = $('#kit-answers');
+  list.insertAdjacentHTML('beforeend', qaRow({ q }));
+  const row = list.lastElementChild;
+  row.scrollIntoView({ block: 'center' });
+  row.querySelector(q ? 'textarea' : 'input').focus();
+  renderAnswerIdeas();
+}
+
+/** Common questions not in the editor yet, as one-tap starters. */
+function renderAnswerIdeas() {
+  const have = new Set([...document.querySelectorAll('#kit-answers [name="q"]')].map((i) => i.value.trim().toLowerCase()));
+  const ideas = ANSWER_IDEAS.filter((q) => !have.has(q.toLowerCase()));
+  $('#kit-ideas').innerHTML = ideas.map((q) => `<button type="button" class="pill" data-idea="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('');
+}
+
+/**
+ * Edit the answer bank. Empty fields take your resume's contact details, marked so you can check
+ * them. With `add`, a new answer row is opened ready to type in (true for a blank one).
+ */
+function openKitEditor({ add = null } = {}) {
   const { fields, filled } = fillKitFields(kit.fields, profile?.contact);
   $('#kit-fields').innerHTML = KIT_FIELDS.map(([key, label, placeholder, attrs]) => `<label${filled.includes(key) ? ' class="from-resume"' : ''}>${escapeHtml(label)}${filled.includes(key) ? ' <span class="muted">(from your resume)</span>' : ''}
     <input name="${key}" value="${escapeHtml(fields[key] ?? '')}" placeholder="${escapeHtml(placeholder)}" ${attrs ?? ''}></label>`).join('');
   const note = $('#kit-from-resume');
   note.hidden = !filled.length;
   note.textContent = `Filled ${filled.length} blank field${filled.length === 1 ? '' : 's'} from your resume. Check ${filled.length === 1 ? 'it' : 'them'}, then press Save.`;
-  $('#kit-extra').value = kit.extra ?? '';
+  $('#kit-answers').innerHTML = kit.answers.map(qaRow).join('');
+  renderAnswerIdeas();
   $('#kit-editor').showModal();
+  editorStart = editorText(); // before a new row is added, so an untouched blank row isn't a change
+  if (add !== null) addAnswerRow(typeof add === 'string' ? add : '');
+}
+
+/** Everything typed in the editor, to tell whether closing it would lose anything. */
+const editorText = () => [...document.querySelectorAll('#kit-form input, #kit-form textarea')]
+  .map((el) => el.value.trim()).filter(Boolean).join('\u0001');
+let editorStart = '';
+
+// The bank stays open across a reload: phones drop background tabs while you're in the employer's form.
+const BANK_OPEN_KEY = 'jobglobal.bankOpen';
+function rememberBank(open) {
+  try {
+    if (open) sessionStorage.setItem(BANK_OPEN_KEY, '1');
+    else sessionStorage.removeItem(BANK_OPEN_KEY);
+  } catch { /* private window: it just won't reopen */ }
+}
+const bankWasOpen = () => {
+  try { return sessionStorage.getItem(BANK_OPEN_KEY) === '1'; } catch { return false; }
+};
+
+/** The answer bank on its own, without a posting: every saved answer, one tap to copy. */
+function renderBank() {
+  const items = kitItems(kit);
+  $('#bank-list').innerHTML = items.length
+    ? `<ul class="bank-list">${items.map(([label, value], i) => `<li><button type="button" data-bank-copy="${i}">
+        <span class="kit-label">${escapeHtml(label)}</span><span class="bank-copy" aria-hidden="true">Copy</span>
+        <span class="bank-value">${escapeHtml(value)}</span></button></li>`).join('')}</ul>`
+    : `<p class="small">Nothing saved yet. Add your contact details and the answers you type again and again${profile?.contact && Object.keys(profile.contact).length ? '; your resume\'s details are ready to drop in' : ''}.</p>`;
+  $('#bank-all').hidden = items.length < 2;
+  $('#bank-edit').textContent = items.length ? 'Edit' : 'Add my details';
+  $('#bank-msg').textContent = '';
+}
+
+function openBank() {
+  renderBank();
+  if (!$('#bank').open) $('#bank').showModal();
+  rememberBank(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,7 +1153,7 @@ function renderResumeMatch() {
   $('#jobs-drop-main').textContent = profile ? 'Use a different resume' : 'Add your resume';
   $('#jobs-drop').classList.toggle('compact', !!profile);
   if (!profile) {
-    body.innerHTML = '<p class="hint">See how well each posting fits your skills, sort by fit, and fill your apply kit from your contact details. Only the skills it mentions and those contact details are kept, in this browser.</p>';
+    body.innerHTML = '<p class="hint">See how well each posting fits your skills, sort by fit, and fill your answer bank from your contact details. Only the skills it mentions and those contact details are kept, in this browser.</p>';
     return;
   }
   const contact = Object.keys(profile.contact ?? {}).length;
@@ -1096,7 +1167,7 @@ function renderResumeMatch() {
     <div class="mine-actions">
       ${profile.skills.length ? `<button type="button" class="ghost small" data-resume-sort aria-pressed="${state.sort === 'match'}">${state.sort === 'match' ? 'Sorted by fit ✓' : 'Sort by fit'}</button>` : ''}
       ${filterable.length ? '<button type="button" class="ghost small" data-resume-filter>Show only my languages</button>' : ''}
-      ${contact && kitBlank ? `<button type="button" class="ghost small" data-resume-kit>Fill apply kit (${kitBlank})</button>` : ''}
+      ${contact && kitBlank ? `<button type="button" class="ghost small" data-resume-kit>Fill answer bank (${kitBlank})</button>` : ''}
       <button type="button" class="linklike small" data-resume-forget>Forget resume</button>
     </div>`;
 }
@@ -1207,7 +1278,7 @@ function focusCard(i, { scroll = true } = {}) {
 // j/k to move between postings, then one key per action. Only in the postings tab, never while typing.
 function onJobKeys(e) {
   if (state.mode !== 'jobs' || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === 'Escape' && kitJob && !$('#kit-editor').open) { closeKit(); return; }
+  if (e.key === 'Escape' && kitJob && !document.querySelector('dialog[open]')) { closeKit(); return; }
   if (e.target.closest('input, textarea, select, [contenteditable], dialog')) return;
   const keys = { j: 1, k: -1 };
   if (e.key in keys) {
@@ -1238,7 +1309,7 @@ function wireApplying() {
     refresh({ push: true });
   });
   $('#hide-done').addEventListener('change', (e) => { prefs.hideDone = e.target.checked; savePrefs(prefs); refresh(); });
-  $('#kit-open').addEventListener('click', openKitEditor);
+  $('#kit-open').addEventListener('click', openBank);
   $('#batch-download').addEventListener('click', downloadBatch);
   $('#autofill-queue').addEventListener('click', queueSaved);
   $('#autofill-history').addEventListener('click', () => toExtension('open-applications'));
@@ -1289,7 +1360,7 @@ function wireApplying() {
     const n = Object.keys(data.entries).length;
     if (!window.confirm(`Replace your current list with the ${n} postings in this backup?`)) return;
     entries = data.entries;
-    if (data.kit) { kit = data.kit; saveKit(kit); }
+    if (data.kit) { kit = normalizeKit(data.kit); saveKit(kit); }
     persist();
     mineMessage(`Restored ${n} postings.`);
   });
@@ -1338,16 +1409,53 @@ function wireApplying() {
   window.addEventListener('blur', left);
   window.addEventListener('focus', onReturn);
 
-  const closeEditor = () => $('#kit-editor').close();
+  // Closing without saving asks first when something was typed: a long answer is easy to lose on a phone.
+  const keepEdits = () => editorText() !== editorStart && !confirm('Discard the changes you made to your answers?');
+  const closeEditor = () => { if (!keepEdits()) $('#kit-editor').close(); };
   $('#kit-cancel').addEventListener('click', closeEditor);
   $('#kit-cancel-2').addEventListener('click', closeEditor);
+  $('#kit-editor').addEventListener('cancel', (e) => { if (keepEdits()) e.preventDefault(); }); // Esc, Android back
+  $('#bank').addEventListener('close', () => rememberBank(false));
+  if (state.mode === 'jobs' && bankWasOpen()) openBank();
   $('#kit-form').addEventListener('submit', () => {
     const fields = Object.fromEntries(KIT_FIELDS.map(([key]) => [key, $(`#kit-fields [name="${key}"]`).value.trim()]));
-    kit = { fields, extra: $('#kit-extra').value };
-    if (!saveKit(kit)) banner('This browser blocked local storage, so the apply kit will be lost when you close the tab.');
+    const answers = [...document.querySelectorAll('#kit-answers .qa-row')]
+      .map((row) => ({ q: row.querySelector('[name="q"]').value, a: row.querySelector('[name="a"]').value }));
+    kit = normalizeKit({ fields, answers });
+    if (!saveKit(kit)) banner('This browser blocked local storage, so your answers will be lost when you close the tab.');
     renderKit();
+    renderBank();
     renderResumeMatch();
-    toast('Apply kit saved.');
+    toast('Answers saved.');
+  });
+  $('#kit-add-answer').addEventListener('click', () => addAnswerRow());
+  $('#kit-ideas').addEventListener('click', (e) => {
+    const idea = e.target.closest('[data-idea]');
+    if (idea) addAnswerRow(idea.dataset.idea);
+  });
+  $('#kit-answers').addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-qa-remove]');
+    if (!remove) return;
+    remove.closest('.qa-row').remove();
+    renderAnswerIdeas();
+  });
+
+  $('#mb-answers').addEventListener('click', openBank);
+  $('#bank-close').addEventListener('click', () => $('#bank').close());
+  $('#bank-edit').addEventListener('click', () => openKitEditor());
+  $('#bank-add').addEventListener('click', () => openKitEditor({ add: true }));
+  const bankBlocked = 'This browser blocked the clipboard. Press and hold the answer to select and copy it instead.';
+  $('#bank-all').addEventListener('click', async (e) => {
+    if (!(await copyText(kitAsText(kit), e.currentTarget))) $('#bank-msg').textContent = bankBlocked;
+  });
+  $('#bank-list').addEventListener('click', async (e) => {
+    const row = e.target.closest('[data-bank-copy]');
+    if (!row) return;
+    const [, value] = kitItems(kit)[Number(row.dataset.bankCopy)] ?? [];
+    if (!value) return;
+    const ok = await copyText(value, row.querySelector('.bank-copy'));
+    $('#bank-msg').textContent = ok ? '' : bankBlocked;
+    if (ok) { row.classList.add('copied'); setTimeout(() => row.classList.remove('copied'), 1200); }
   });
   document.addEventListener('keydown', onJobKeys);
 }
@@ -1671,7 +1779,7 @@ async function receiveTransfer() {
   }
   const { entries: merged, changed } = mergeEntries(entries, data.entries);
   const n = Object.keys(data.entries).length;
-  banner(`This link carries ${n} posting${n === 1 ? '' : 's'}${data.kit ? ' and apply-kit answers' : ''} from your other device. ${changed} ${changed === 1 ? 'is' : 'are'} new or newer than what's here.`, {
+  banner(`This link carries ${n} posting${n === 1 ? '' : 's'}${data.kit ? ' and saved answers' : ''} from your other device. ${changed} ${changed === 1 ? 'is' : 'are'} new or newer than what's here.`, {
     label: 'Add to this device',
     run: () => {
       entries = merged;

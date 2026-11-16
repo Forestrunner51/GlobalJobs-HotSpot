@@ -330,8 +330,23 @@ kbd { font: inherit; font-size: 0.75rem; background: var(--panel-2); border: 1px
 .kit-list button.copied { color: var(--ok); border-color: var(--ok); }
 .kit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .kit-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 12px; margin: 10px 0; }
-.kit-fields label, .kit-extra { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
-.kit-fields input, .kit-extra textarea { width: 100%; padding: 7px 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 0.9rem; }
+.kit-fields label { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+.kit-fields input, .qa-row input, .qa-row textarea { width: 100%; padding: 7px 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 0.9rem; }
+.qa-title { margin: 16px 0 2px; font-size: 1rem; }
+.qa-list { display: grid; gap: 10px; margin: 8px 0; }
+.qa-row { display: grid; gap: 6px; padding: 10px; background: var(--panel-2); border-radius: 8px; }
+.qa-row input { font-weight: 600; }
+.qa-row textarea { resize: vertical; min-height: 4.5em; line-height: 1.45; }
+.qa-row [data-qa-remove] { justify-self: end; }
+.qa-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.qa-ideas { display: contents; }
+.bank-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.bank-list button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; width: 100%; text-align: left; padding: 10px 12px; background: var(--panel-2); border: 1px solid transparent; border-radius: 8px; color: var(--text); font: inherit; cursor: pointer; }
+.bank-list button:hover, .bank-list button:focus-visible { border-color: var(--accent); }
+.bank-list button.copied { border-color: var(--ok); }
+.bank-copy { font-size: 0.78rem; font-weight: 700; color: var(--accent); }
+.bank-list button.copied .bank-copy { color: var(--ok); }
+.bank-value { grid-column: 1 / -1; font-size: 0.92rem; line-height: 1.4; white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .kit-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 #kit-editor { width: min(640px, calc(100vw - 2 * var(--gutter))); }
 
@@ -379,7 +394,7 @@ kbd { font: inherit; font-size: 0.75rem; background: var(--panel-2); border: 1px
 @media (max-width: 760px) {
   :root { --gutter: 12px; }
   /* 16px inputs: iOS zooms the whole page when a smaller one gets focus. */
-  input, select, textarea, .floor select, .place-pick select, .kit-fields input, .kit-extra textarea, .sort-pick select { font-size: 16px; }
+  input, select, textarea, .floor select, .place-pick select, .kit-fields input, .qa-row input, .qa-row textarea, .sort-pick select { font-size: 16px; }
   .desk-only { display: none !important; }
   .phone-only { display: inline-block; }
   .layout, .layout.has-detail { grid-template-columns: minmax(0, 1fr); padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
@@ -412,6 +427,10 @@ kbd { font: inherit; font-size: 0.75rem; background: var(--panel-2); border: 1px
   .mobile-bar button:first-child { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .mobile-bar button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   body.kit-open .mobile-bar { display: none; }
+  .mobile-bar { gap: 6px; }
+  .mobile-bar button { padding: 0 6px; white-space: nowrap; font-size: 0.88rem; min-width: 0; }
+  .bank-list button { padding: 12px; min-height: 56px; }
+  .qa-add .pill { min-height: 36px; }
   .toast { bottom: calc(76px + env(safe-area-inset-bottom)); border-radius: 12px; width: max-content; }
   body.kit-open .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)); }
 

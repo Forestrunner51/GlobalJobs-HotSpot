@@ -203,6 +203,21 @@ class RateLimit(unittest.TestCase):
         self.assertIn("himalayas", fj.CUT_SHORT)
         fj.CUT_SHORT.clear()
 
+    def test_himalayas_shuffle_asks_every_search_in_some_order(self):
+        asked = []
+
+        def fake(url, headers=None, timeout=60):
+            asked.append(url.split("q=")[1].split("&")[0])
+            return {"totalCount": 0, "jobs": []}
+        real_get, fj.get_json = fj.get_json, fake
+        words = [(str(i), f"w{i}") for i in range(30)]
+        try:
+            fj.from_himalayas(words, {"pages": 1, "secondsBetweenCalls": 0, "shuffle": True})
+        finally:
+            fj.get_json = real_get
+        self.assertEqual(sorted(asked), sorted(q for _, q in words))
+        self.assertNotEqual(asked, [q for _, q in words])  # 30! orders; the listed one won't come up
+
     def test_cut_short_source_keeps_last_runs_postings(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:

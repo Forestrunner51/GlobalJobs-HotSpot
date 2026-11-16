@@ -63,7 +63,7 @@
           <button type="button" id="due-line" class="linklike due" hidden></button>
           <label class="check"><input type="checkbox" id="hide-done"> Hide postings I applied to or hid</label>
           <div class="mine-actions">
-            <button type="button" class="ghost small" id="kit-open">Apply kit</button>
+            <button type="button" class="ghost small" id="kit-open">Answer bank</button>
             <button type="button" class="ghost small desk-only" id="batch-download">Download saved for prep</button>
             <button type="button" class="ghost small" id="autofill-queue" hidden>Apply to saved with Autofill</button>
             <button type="button" class="ghost small" id="autofill-history" hidden>Application history</button>
@@ -75,7 +75,7 @@
               <button type="button" class="ghost small" id="transfer-make">Send my list to another device</button>
             </div>
             <div id="transfer-box" class="transfer-box" hidden>
-              <p class="hint">Open this link on the other device. It carries your saved postings and apply-kit answers inside the link itself (nothing is uploaded), so send it only to yourself.</p>
+              <p class="hint">Open this link on the other device. It carries your saved postings and saved answers inside the link itself (nothing is uploaded), so send it only to yourself.</p>
               <input id="transfer-link" class="text-input" type="text" readonly aria-label="Transfer link">
               <div class="mine-actions">
                 <button type="button" class="btn-primary small" id="transfer-share" hidden>Share…</button>
@@ -128,9 +128,9 @@
         <section>
           <h2>Apply quickly</h2>
           <ol class="steps">
-            <li><strong>Add your resume</strong> above. It's read on this device: it fills your apply kit and shows how well each posting fits.</li>
+            <li><strong>Add your resume</strong> above. It's read on this device: it fills your answer bank and shows how well each posting fits.</li>
             <li><strong>☆ Save</strong> the postings you want<span class="desk-only"> (or press <kbd>s</kbd>)</span>.</li>
-            <li>Press <strong>Apply</strong>. The employer's form opens in a new tab and your <strong>apply kit</strong> waits here with a Copy button per answer. Submit the form yourself; when you come back, say whether you applied.</li>
+            <li>Press <strong>Apply</strong>. The employer's form opens in a new tab and your <strong>answer bank</strong> waits here with a Copy button per answer. Submit the form yourself; when you come back, say whether you applied.</li>
             <li>Follow-ups come due 6 days later under <strong>My applications</strong>.</li>
             <li class="desk-only">Optional, on a computer: <strong>Download saved for prep</strong>, then in Terminal:<br><code class="cmd">.venv/bin/python apply/jobprep.py batch ~/Downloads/prep-batch-….json</code><br>Each posting gets a memo PDF, an email, and <code>answers.txt</code> with "why this company" and a cover note. It asks before using the API.</li>
           </ol>
@@ -235,6 +235,7 @@
   <nav class="mobile-bar" aria-label="Quick actions">
     <button type="button" id="mb-filters">Filters</button>
     <button type="button" id="mb-saved" aria-pressed="false">★ Saved</button>
+    <button type="button" id="mb-answers">Answers</button>
     <button type="button" id="mb-map" aria-pressed="false">Map</button>
   </nav>
 
@@ -243,18 +244,37 @@
     <button type="button" id="toast-action" class="linklike" hidden></button>
   </div>
 
+  <dialog id="bank" class="bank" aria-labelledby="bank-title">
+    <div class="dialog-head">
+      <h2 id="bank-title">Answer bank</h2>
+      <button type="button" class="icon-btn" id="bank-close" aria-label="Close">×</button>
+    </div>
+    <p class="hint">Tap an answer to copy it, then paste it into the employer's form. Stored only in this browser.</p>
+    <div id="bank-list"></div>
+    <p class="status" role="status" id="bank-msg"></p>
+    <div class="kit-form-actions">
+      <button type="button" class="ghost" id="bank-all">Copy all</button>
+      <button type="button" class="ghost" id="bank-edit">Edit</button>
+      <button type="button" class="btn-primary" id="bank-add">+ Add an answer</button>
+    </div>
+  </dialog>
+
   <dialog id="kit-editor" aria-labelledby="kit-editor-title">
     <form method="dialog" id="kit-form">
       <div class="dialog-head">
-        <h2 id="kit-editor-title">Apply kit</h2>
+        <h2 id="kit-editor-title">Edit your answers</h2>
         <button type="button" class="icon-btn" id="kit-cancel" aria-label="Close">×</button>
       </div>
-      <p class="hint">Answers application forms ask for every time. When you press Apply on a posting, these appear with a Copy button each, so you can fill the employer's form fast. You still fill it in and submit it yourself. Stored only in this browser.</p>
+      <p class="hint">Answers application forms ask for every time. They wait in your answer bank with a Copy button each, and appear when you press Apply on a posting. You still fill in and submit each form yourself. Stored only in this browser.</p>
       <p id="kit-from-resume" class="status ok" hidden></p>
       <div id="kit-fields" class="kit-fields"></div>
-      <label class="kit-extra">Other saved answers
-        <textarea id="kit-extra" rows="6" placeholder="Anything else you paste often: a short bio, a project summary, an answer about remote work. Separate answers with a blank line; each gets its own Copy button."></textarea>
-      </label>
+      <h3 class="qa-title">Answers to questions</h3>
+      <p class="hint">Longer answers you paste often. Give each a question or title so it's easy to find; each gets its own Copy button.</p>
+      <div id="kit-answers" class="qa-list"></div>
+      <div class="qa-add">
+        <button type="button" class="ghost small" id="kit-add-answer">+ Add an answer</button>
+        <span id="kit-ideas" class="qa-ideas"></span>
+      </div>
       <div class="kit-form-actions">
         <button type="button" class="ghost" id="kit-cancel-2">Cancel</button>
         <button type="submit" class="btn-primary" id="kit-save">Save</button>
@@ -281,7 +301,7 @@
     <h3>Job postings</h3>
     <p>The postings tab lists live openings that mention the programming languages in <code>jobs/sources.json</code> (Rust, C++, Go, Python and others). They come from the public job-board APIs of the companies in <code>jobs/sources.json</code> (Greenhouse, Lever, Ashby), the latest Hacker News "Who is hiring?" thread and, if you add API keys, Adzuna and USAJobs. Cloud and infrastructure roles (Cloud / AWS, Platform, Infrastructure, SRE, DevOps) are found by job title, whatever languages the posting lists, and have one-tap Quick search buttons above the list. Frameworks and cloud tools (React, Spring Boot, AWS, ...) are tags on those postings, matched in the same text; a posting that mentions only a framework isn't included. A posting can appear because it lists a language once among several; "Focused postings only" hides those. Postings that only say "Remote" or name a city outside the US are in the list but not on the map. Hybrid comes from the location field or phrases like "3 days a week in the office"; On-site means a posting names a place and mentions neither, so some of those are really hybrid. Postings refresh automatically: closed roles drop out of company boards, and feed postings older than 60 days are removed. Pay ranges come from the board when it provides one, otherwise from the first annual range written in the posting. Applying always happens on the employer's own site.</p>
     <h3>Applying</h3>
-    <p>Nothing on this site applies for you. Save postings, prepare tailored materials with <code>apply/jobprep.py</code>, then fill in and submit each application yourself on the employer's site. The apply kit only puts your own saved answers on the clipboard. Your saved postings, statuses and apply kit stay in this browser's storage and are never sent anywhere. Adding a resume on the postings tab reads it on your device and keeps only the list of skills it mentions and your contact details, in this browser; the resume itself isn't stored. "Send my list to another device" puts your list inside a link (after the #, which browsers don't send to any server); whoever opens that link gets the list, so send it only to yourself.</p>
+    <p>Nothing on this site applies for you. Save postings, prepare tailored materials with <code>apply/jobprep.py</code>, then fill in and submit each application yourself on the employer's site. The answer bank only puts your own saved answers on the clipboard. Your saved postings, statuses and answer bank stay in this browser's storage and are never sent anywhere. Adding a resume on the postings tab reads it on your device and keeps only the list of skills it mentions and your contact details, in this browser; the resume itself isn't stored. "Send my list to another device" puts your list inside a link (after the #, which browsers don't send to any server); whoever opens that link gets the list, so send it only to yourself.</p>
     <h3>Sources</h3>
     <ul id="about-sources"></ul>
   </dialog>

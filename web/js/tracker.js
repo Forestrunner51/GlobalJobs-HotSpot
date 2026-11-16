@@ -47,17 +47,41 @@ function save(key, value) {
 
 export const loadEntries = () => load(TRACKER_KEY, {});
 export const saveEntries = (entries) => save(TRACKER_KEY, entries);
-export const loadKit = () => load(KIT_KEY, { fields: {}, extra: '' });
+export const loadKit = () => normalizeKit(load(KIT_KEY, null));
 export const saveKit = (kit) => save(KIT_KEY, kit);
 export const loadPrefs = () => ({ hideDone: true, ...load(PREFS_KEY, {}) });
 export const savePrefs = (prefs) => save(PREFS_KEY, prefs);
 
-/** The apply kit as [label, value] pairs to copy: filled fields, then each "other answer" block. */
+/** Questions offered as a start for the answer bank: the open ones forms ask most. */
+export const ANSWER_IDEAS = [
+  'Why do you want to work here?',
+  'Tell us about yourself',
+  'A project you are proud of',
+  'Why are you looking for a new role?',
+  'Remote, hybrid or on-site?',
+];
+
+/**
+ * The kit in its current shape: { fields, answers: [{ q, a }] }. Older kits kept free-form answers
+ * in one `extra` text, split on blank lines; those become answers without a question.
+ */
+export function normalizeKit(kit) {
+  const k = kit && typeof kit === 'object' ? kit : {};
+  const text = (v) => (typeof v === 'string' ? v.trim() : '');
+  const answers = (Array.isArray(k.answers) ? k.answers : [])
+    .map((x) => ({ q: text(x?.q), a: text(x?.a) })).filter((x) => x.a);
+  for (const block of text(k.extra).split(/\n\s*\n/)) if (block.trim()) answers.push({ q: '', a: block.trim() });
+  return { fields: k.fields && typeof k.fields === 'object' ? k.fields : {}, answers };
+}
+
+/** The answer bank as [label, value] pairs to copy: filled fields, then each saved answer. */
 export function kitItems(kit) {
-  const fields = KIT_FIELDS.map(([key, label]) => [label, (kit.fields?.[key] ?? '').trim()]).filter(([, v]) => v);
-  const extra = (kit.extra ?? '').split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean)
-    .map((b, i) => [`Saved answer ${i + 1}`, b]);
-  return [...fields, ...extra];
+  const { fields, answers } = normalizeKit(kit);
+  let n = 0;
+  return [
+    ...KIT_FIELDS.map(([key, label]) => [label, (fields[key] ?? '').trim()]).filter(([, v]) => v),
+    ...answers.map(({ q, a }) => [q || `Saved answer ${n += 1}`, a]),
+  ];
 }
 
 export function isoToday(now = new Date()) {
@@ -150,7 +174,7 @@ export const exportBackup = (entries, kit, today = isoToday()) => ({
 });
 
 /** The whole kit as text, one answer per block, to paste into a notes app or a message to yourself. */
-export const kitAsText = (kit) => kitItems(kit).map(([label, value]) => `${label}: ${value}`).join('\n');
+export const kitAsText = (kit) => kitItems(kit).map(([label, value]) => (/\?$/.test(label) ? `${label}\n${value}` : `${label}: ${value}`)).join('\n');
 
 // ---------------------------------------------------------------------------
 // Moving your list to another device (phone <-> laptop) without a server: the backup, compressed,
@@ -217,12 +241,19 @@ export function mergeEntries(mine, theirs) {
 /** Kit answers from another device fill this one's blanks; what's already here stays. */
 export function mergeKit(mine, theirs) {
   if (!theirs || typeof theirs !== 'object') return mine;
-  const fields = { ...mine.fields };
+  const here = normalizeKit(mine);
+  const there = normalizeKit(theirs);
+  const fields = { ...here.fields };
   for (const [key] of KIT_FIELDS) {
-    const v = theirs.fields?.[key];
+    const v = there.fields[key];
     if (typeof v === 'string' && v.trim() && !(fields[key] ?? '').trim()) fields[key] = v;
   }
-  return { fields, extra: (mine.extra ?? '').trim() ? mine.extra : String(theirs.extra ?? '') };
+  // Answers from the other device are added unless the same question or the same text is here already.
+  const answers = [...here.answers];
+  for (const x of there.answers) {
+    if (!answers.some((m) => m.a === x.a || (x.q && m.q.toLowerCase() === x.q.toLowerCase()))) answers.push(x);
+  }
+  return { fields, answers };
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +280,9 @@ export function applicationKey(raw) {
   if (ghParam && /^\d+$/.test(ghParam)) return `greenhouse:${ghParam}`;
   const lever = /^jobs\.(eu\.)?lever\.co$/.test(host) && u.pathname.match(/^\/[^/]+\/([0-9a-f-]{36})/i);
   if (lever) return `lever:${lever[1].toLowerCase()}`;
+  // Ashby: the posting, its /application tab, and a company page that embeds it (?ashby_jid=).
+  const ashby = (host === 'jobs.ashbyhq.com' && u.pathname.match(/^\/[^/]+\/([0-9a-f-]{36})/i)?.[1]) || u.searchParams.get('ashby_jid');
+  if (ashby && /^[0-9a-f-]{36}$/i.test(ashby)) return `ashby:${ashby.toLowerCase()}`;
   if (/(^|\.)(myworkdayjobs|myworkdaysite|myworkday)\.com$/.test(host)) {
     const path = u.pathname
       .replace(/^\/[a-z]{2}-[A-Z]{2}(?=\/)/, '')

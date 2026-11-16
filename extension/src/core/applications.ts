@@ -48,7 +48,8 @@ export const MAX_DESCRIPTION = 30_000;
 /**
  * One key per job however you reached it: Greenhouse's job id is the same on its own board,
  * in a company's embedded form (?gh_jid=, &token=) and on the confirmation page; Lever's posting
- * id is the same on the posting, …/apply and …/thanks; Workday's job
+ * id is the same on the posting, …/apply and …/thanks; Ashby's on the posting, its /application
+ * tab and an embedding company page (?ashby_jid=); Workday's job
  * path is the same on the posting, every application step and the "submitted" page.
  */
 export function appKey(raw: string): string {
@@ -65,6 +66,9 @@ export function appKey(raw: string): string {
   if (ghParam && /^\d+$/.test(ghParam)) return `greenhouse:${ghParam}`;
   const lever = /^jobs\.(eu\.)?lever\.co$/.test(host) && u.pathname.match(/^\/[^/]+\/([0-9a-f-]{36})/i);
   if (lever) return `lever:${lever[1].toLowerCase()}`;
+  // Ashby: the posting, its /application tab, and a company page that embeds it (?ashby_jid=).
+  const ashby = (host === 'jobs.ashbyhq.com' && u.pathname.match(/^\/[^/]+\/([0-9a-f-]{36})/i)?.[1]) || u.searchParams.get('ashby_jid');
+  if (ashby && /^[0-9a-f-]{36}$/i.test(ashby)) return `ashby:${ashby.toLowerCase()}`;
   if (/(^|\.)(myworkdayjobs|myworkdaysite|myworkday)\.com$/.test(host)) {
     const path = u.pathname
       .replace(/^\/[a-z]{2}-[A-Z]{2}(?=\/)/, '') // locale prefix

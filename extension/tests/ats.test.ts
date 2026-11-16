@@ -11,6 +11,8 @@ describe('detectAts', () => {
     ['https://acme.wd5.myworkdayjobs.com/en-US/External/job/Austin/Engineer_R123/apply', 'workday'],
     ['https://wd3.myworkday.com/acme/d/inst/1$9925/9925$1.htmld', 'workday'],
     ['https://jobs.ashbyhq.com/zed/6871e6ed', 'ashby'],
+    ['https://jobs.ashbyhq.com/zed/6871e6ed-0000-4000-8000-000000000000/application', 'ashby'],
+    ['https://www.acme.com/careers?ashby_jid=dcea53a5-5650-406d-a154-fad077c4b81b', 'ashby'],
     ['https://careers-acme.icims.com/jobs/123/job', 'icims'],
   ])('%s -> %s', (url, id) => {
     expect(detectAts(url)?.id).toBe(id);

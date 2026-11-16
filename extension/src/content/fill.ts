@@ -1,4 +1,4 @@
-// Content script for Greenhouse and Workday pages (and frames). It:
+// Content script for Greenhouse, Lever, Ashby and Workday pages (and frames). It:
 //  - fills the form when you click Fill in the popup (the popup calls __jobAutofill),
 //  - records the job in your application history when you fill it or mark it applied,
 //  - marks it applied when the page confirms your submission,

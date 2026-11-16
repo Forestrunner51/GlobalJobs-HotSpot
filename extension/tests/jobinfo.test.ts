@@ -58,3 +58,30 @@ describe('Workday confirmation', () => {
     }
   });
 });
+
+describe('Ashby job details', () => {
+  it('reads the posting from the page\'s JobPosting data, on the application tab too', async () => {
+    setUrl('https://jobs.ashbyhq.com/Acme/dcea53a5-5650-406d-a154-fad077c4b81b/application?utm_source=x');
+    document.title = 'Platform Engineer @ Acme';
+    document.body.innerHTML = `<h1 class="ashby-job-posting-heading">Platform Engineer</h1>
+      <script type="application/ld+json">${JSON.stringify({
+        '@context': 'https://schema.org/', '@type': 'JobPosting', title: 'Platform Engineer',
+        description: '<p>Run the platform.</p><ul><li>Kubernetes</li><li>AWS</li></ul>',
+        hiringOrganization: { '@type': 'Organization', name: 'Acme Robotics' },
+        jobLocation: { '@type': 'Place', address: { addressLocality: 'Austin', addressRegion: 'Texas', addressCountry: 'United States' } },
+      })}</script>`;
+    const job = await jobInfo(document);
+    expect(job).toMatchObject({
+      url: 'https://jobs.ashbyhq.com/Acme/dcea53a5-5650-406d-a154-fad077c4b81b', title: 'Platform Engineer',
+      company: 'Acme Robotics', location: 'Austin, Texas, United States', site: 'Ashby',
+    });
+    expect(job?.description).toBe('Run the platform.\nKubernetes\nAWS');
+  });
+
+  it('falls back to the page title without that data', async () => {
+    setUrl('https://jobs.ashbyhq.com/acme/dcea53a5-5650-406d-a154-fad077c4b81b');
+    document.title = 'SRE @ Acme';
+    document.body.innerHTML = '';
+    expect(await jobInfo(document)).toMatchObject({ title: 'SRE', company: 'Acme', site: 'Ashby' });
+  });
+});

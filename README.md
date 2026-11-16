@@ -85,6 +85,10 @@ Every run rebuilds the list from scratch, so closed roles drop out:
   `maxAgeDays` in `sources.json` (60 and 45 days).
 - If a source fails to load (network error, server error after two retries), its postings from the
   previous run are kept rather than counted as closed.
+- Himalayas refuses requests part-way through most runs (HTTP 429). The run keeps what it got plus
+  that source's postings from the previous run, and asks its searches in a shuffled order so
+  successive runs cover different ones. Because a kept posting may have closed since, Himalayas
+  postings also expire 60 days after they were posted.
 - Each posting records `firstSeen`. The site tags postings first seen in the last 7 days as **New**,
   has a "New in the last 7 days" filter, and shows "N new, M closed or expired" since the last run.
 
@@ -111,14 +115,16 @@ Nothing on the site or in `apply/` submits an application. The tools cut the tim
   the skills you lack, with a "Best for my resume" sort and a one-tap filter to your languages.
   The file is read in the browser. Only the names of the tracked skills it mentions and your contact
   details (name, email, phone, links, city) are kept, in localStorage; the text isn't stored.
-  **Fill apply kit** drops those contact details into the kit's empty fields for you to check.
+  **Fill answer bank** drops those contact details into the bank's empty fields for you to check.
 - **☆ Save / Not interested / Mark applied** on each posting. Applying and hiding show an Undo. **My applications** shows Saved, Applied
   and Hidden lists; applied and hidden postings leave the main list. Follow-ups come due 6 days after
   applying. Saved postings that disappear from the data are shown as "no longer listed".
-- **Apply kit**: your standard form answers (name, email, links, work authorization, salary, "how did
-  you hear", saved paragraphs), entered once. **Apply** opens the employer's form in a new tab and the
-  kit beside it, with a Copy button per answer, **Copy all answers** and **Mark as applied**. When
-  you come back to the tab it asks whether you submitted, and marks the posting applied or saves it.
+- **Answer bank**: your standard form answers (name, email, links, work authorization, salary, "how
+  did you hear") and longer answers saved under their question ("Why do you want to work here?"),
+  entered once. **Answer bank** (on a phone, **Answers** in the bottom bar) lists them all; tap one
+  to copy it, then paste it into the employer's form. **Apply** opens the employer's form in a new
+  tab and the same answers beside it, with **Copy all answers** and **Mark as applied**. When you
+  come back to the tab it asks whether you submitted, and marks the posting applied or saves it.
 - **Batch prep**: **Download saved for prep** saves your shortlist (full posting text included), and
   `apply/jobprep.py batch <file>` drafts a memo, email and form answers for each, after confirming.
 - **With the Autofill extension** (`extension/`, see its README): **Apply to saved with Autofill**
@@ -135,7 +141,7 @@ Nothing on the site or in `apply/` submits an application. The tools cut the tim
 
 On a phone (760px and narrower) the postings list comes first. A bar at the bottom opens the
 filters as a full-screen drawer, shows your saved postings, and unfolds the map, which stays off
-until asked for so the globe isn't built on every visit. The apply kit is a bottom sheet. Terminal
+until asked for so the globe isn't built on every visit. The answer bank and the apply panel are bottom sheets. Terminal
 steps (prep, keyboard shortcuts) are hidden there. The site has a web manifest and icon, so
 "Add to Home Screen" gives it its own icon and opens on the postings tab.
 
@@ -239,8 +245,8 @@ The page's Content Security Policy allows only same-origin scripts and connectio
 | `resume.js` | PDF/DOCX/TXT text extraction in the browser, including detection of scanned (image-only) PDFs. |
 | `state.js` | Selected occupations, metric, floor, metro, tab and job filters kept in the URL. |
 | `jobs.js` | Job postings: filters, per-metro counts for the map, and the text handed to `jobprep.py`. |
-| `tracker.js` | Saved/applied/hidden postings, follow-ups, apply kit, CSV/backup, batch-prep files and the device-transfer link (localStorage only). |
-| `profile.js` | Resume on the postings tab: tracked skills it mentions, contact details for the apply kit, and each posting's match percent. |
+| `tracker.js` | Saved/applied/hidden postings, follow-ups, answer bank, CSV/backup, batch-prep files and the device-transfer link (localStorage only). |
+| `profile.js` | Resume on the postings tab: tracked skills it mentions, contact details for the answer bank, and each posting's match percent. |
 
 Add `?nowebgl` to any URL to force the fallback view.
 
