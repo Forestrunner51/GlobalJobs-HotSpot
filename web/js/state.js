@@ -20,6 +20,7 @@ export function readState(search = location.search) {
     where: p.get('where') === 'us' ? 'us' : 'all',
     // where=remote predates the work-style filter; keep old links working.
     work: ['remote', 'hybrid', 'onsite'].includes(p.get('work')) ? p.get('work') : p.get('where') === 'remote' ? 'remote' : 'any',
+    jobType: ['fulltime', 'contract', 'parttime'].includes(p.get('type')) ? p.get('type') : 'any',
     fresh: p.get('new') === '1',
     focus: p.get('focus') === '1',
     levels: [...new Set((p.get('lvl') || '').split(',').filter((l) => LEVEL_KEYS.includes(l)))],
@@ -34,7 +35,7 @@ export function readState(search = location.search) {
 }
 
 export function stateToSearch({
-  occ, metric, floor, metro, mode = 'occ', q = '', where = 'all', focus = false, work = 'any', fresh = false,
+  occ, metric, floor, metro, mode = 'occ', q = '', where = 'all', focus = false, work = 'any', jobType = 'any', fresh = false,
   levels = [], maxYears = null, yearsKnown = false, usState = null, langs = [], mine = null,
   sort = 'relevance', pay = false,
 }) {
@@ -47,6 +48,7 @@ export function stateToSearch({
   if (q) p.set('q', q);
   if (where !== 'all') p.set('where', where);
   if (work !== 'any') p.set('work', work);
+  if (jobType !== 'any') p.set('type', jobType);
   if (fresh) p.set('new', '1');
   if (focus) p.set('focus', '1');
   if (levels.length) p.set('lvl', levels.join(','));

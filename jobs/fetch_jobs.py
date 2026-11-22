@@ -7,11 +7,12 @@ text in 32 pieces, loaded only when you open a posting or copy it for apply/jobp
 Sources, all used through their public APIs:
   Greenhouse, Lever, Ashby   company job boards listed in sources.json (no key needed)
   Hacker News                recent monthly "Ask HN: Who is hiring?" threads (no key needed)
-  Himalayas, The Muse        job search APIs (no key needed)
+  Himalayas                  job search API (no key needed). The Muse closed its public API in
+                             November 2026, so it's no longer a source
   Remotive, Remote OK, Jobicy  remote-job feeds; their terms ask that listings name them and link
                              back to their page, which the site does ("via Remote OK")
-  Adzuna                     set ADZUNA_APP_ID and ADZUNA_APP_KEY (developer.adzuna.com; free only for evaluation,
-                             with low call limits; ongoing use needs a paid plan)
+  Adzuna                     off by default (paid API). To use it, set "enabled": true under "adzuna" in
+                             sources.json and set ADZUNA_APP_ID and ADZUNA_APP_KEY (developer.adzuna.com)
   USAJobs                    set USAJOBS_API_KEY and USAJOBS_EMAIL (free at developer.usajobs.gov)
 
     python jobs/fetch_jobs.py
@@ -105,17 +106,22 @@ def keyword_groups(cfg: dict) -> list[dict]:
     labels postings that match another group but never brings in a posting by itself, so a sales
     role that mentions AWS stays out. A group with "titleOnly" (roles: Platform, SRE, ...) is
     matched against job titles only, since nearly every posting says "infrastructure" somewhere;
-    its "titleRequires" / "titleExcludes" patterns keep "Cloud Account Executive" out."""
+    its "titleRequires" / "titleExcludes" patterns keep "Cloud Account Executive" out. A group with
+    "minMentions" (XR) needs its keyword in the title or that many times in the text, so a company's
+    boilerplate ("build for PC, console and VR") doesn't tag every posting it has."""
     return cfg.get("keywordGroups") or DEFAULT_GROUPS
 
 
 class TitleRules:
-    """Which keywords are matched on the title alone, and what else the title must (not) say."""
+    """Which keywords are matched on the title alone, what else the title must (not) say, and how
+    often a keyword must appear in the text when the title doesn't name it."""
 
     def __init__(self, specs: list[dict], groups: list[dict]):
         by_id = {g["id"]: g for g in groups}
         self.names = frozenset(k["name"] for k in specs if by_id.get(k["group"], {}).get("titleOnly"))
         self.requires, self.excludes = {}, {}
+        self.min_mentions = {k["name"]: by_id[k["group"]]["minMentions"] for k in specs
+                             if by_id.get(k["group"], {}).get("minMentions")}
         for k in specs:
             g = by_id.get(k["group"], {})
             if k["name"] in self.names:
@@ -173,6 +179,8 @@ def match_keywords(title: str, text: str, keywords: dict[str, re.Pattern],
             hits = []
         else:
             hits = list(rx.finditer(text))
+            if not t_hit and len(hits) < roles.min_mentions.get(word, 1):
+                continue
         if not (t_hit or hits):
             continue
         found.append(word)
@@ -214,6 +222,51 @@ YEARS_RES = [
                r"(?:\s+of)?(?:\s+[\w/&+#-]+){0,5}?\s+(?:experience|exp\b)", re.I),
     re.compile(rf"experience[^.\n]{{0,40}}?(?<![\d.]){_NUM}\s*\+?\s*(?:years?|yrs?)", re.I),
 ]
+
+
+# ---------------------------------------------------------------- employment type
+
+# A board's own employment-type field, letters only ("Full-Time", "full_time" -> "fulltime"). Lever's
+# field is free text ("Contract - 6 months"), so these are searched for, not matched exactly.
+# Anything else (full-time, internship, "Permanent") counts as full-time.
+_TYPE_WORDS = [(re.compile(r"contract|freelance|temp|fixedterm"), "contract"), (re.compile(r"parttime"), "parttime")]
+# Titles like "Unity Developer (Contract)" or "Backend Engineer - Contractor". "Contract" has to be
+# set off from the rest of the title, so "Smart Contract Engineer" and "Contracts Manager" don't count.
+CONTRACT_TITLE = re.compile(r"(?:^|[(\[,|/–—-]\s*)(?:\d+[- ]months?\s+)?(?:contract(?:or)?|freelance|temporary|temp|"
+                            r"fixed[- ]term|contract[- ]to[- ]hire|1099|c2c)(?:\s*(?:role|position|basis|only))?\s*(?:[)\],|/–—-]|$)"
+                            r"|\bfreelancer?\b|\bcontractor\b", re.I)
+PARTTIME_TITLE = re.compile(r"\bpart[- ]time\b", re.I)
+# Body text: only a direct statement about this role, not "contractors and employees alike".
+CONTRACT_TEXT = re.compile(r"\b(?:this|the|it)\s+is\s+an?\s+(?:\d+[- ](?:month|week)\s+|short[- ]term\s+|long[- ]term\s+|remote\s+)*"
+                           r"(?:contract|contractor|freelance|temporary|fixed[- ]term|contract[- ]to[- ]hire)\b"
+                           r"|\b\d+[- ]months?\s+contract(?:[- ]to[- ]hire)?\b|\bcontract[- ]to[- ]hire\b"
+                           r"|\b(?:employment|job|position|engagement)\s+type:?\s+(?:contract|contractor|freelance|temporary)\b", re.I)
+PARTTIME_TEXT = re.compile(r"\b(?:this|the|it)\s+is\s+an?\s+(?:remote\s+)?part[- ]time\b"
+                           r"|\b(?:employment|job|position)\s+type:?\s+part[- ]time\b", re.I)
+
+
+def employment_type(board_value, title: str, text: str = "") -> str | None:
+    """"contract", "parttime", or None for full-time / not stated, from the board's own field
+    (Lever, Ashby, Himalayas, Remotive, Jobicy, Adzuna), the title, or, when the board doesn't say,
+    a plain statement in the text ("This is a 6-month contract role")."""
+    values = board_value if isinstance(board_value, list) else [board_value]
+    keys = [re.sub(r"[^a-z]", "", str(v or "").lower()) for v in values]
+    for rx, kind in _TYPE_WORDS:
+        if any(rx.search(k) for k in keys):
+            return kind
+    # Boards often leave the field at its "Full-time" default, so a title saying otherwise wins.
+    if CONTRACT_TITLE.search(title):
+        return "contract"
+    if PARTTIME_TITLE.search(title):
+        return "parttime"
+    if any(keys):
+        return None  # the board says it's full-time (or an internship)
+    head = text[:4000]
+    if CONTRACT_TEXT.search(head):
+        return "contract"
+    if PARTTIME_TEXT.search(head):
+        return "parttime"
+    return None
 
 
 def classify_level(title: str) -> str:
@@ -436,6 +489,7 @@ def from_lever(company: dict) -> list[dict]:
             "location": " | ".join(filter(None, locs)),
             "remote": j.get("workplaceType") == "remote",
             "hybrid": j.get("workplaceType") == "hybrid",
+            "employment": cats.get("commitment"),
             "url": j.get("hostedUrl"),
             "applyUrl": j.get("applyUrl") or j.get("hostedUrl"),
             "posted": iso_date(j.get("createdAt")),
@@ -469,6 +523,7 @@ def from_ashby(company: dict) -> list[dict]:
             "remote": bool(j.get("isRemote")) or j.get("workplaceType") == "Remote",
             "hybrid": j.get("workplaceType") == "Hybrid",
             "salary": comp or None,
+            "employment": j.get("employmentType"),
             "url": j.get("jobUrl"),
             "applyUrl": j.get("applyUrl") or j.get("jobUrl"),
             "posted": iso_date(j.get("publishedAt")),
@@ -566,6 +621,7 @@ def from_adzuna(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
                     "title": html_to_text(j.get("title")),
                     "location": (j.get("location") or {}).get("display_name") or "",
                     "lat": j.get("latitude"), "lng": j.get("longitude"),
+                    "employment": [j.get("contract_type"), j.get("contract_time")],
                     "url": j.get("redirect_url"),
                     "applyUrl": j.get("redirect_url"),
                     "posted": iso_date(j.get("created")),
@@ -685,6 +741,7 @@ def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
                     "location": f"Remote ({where})",
                     "remote": True,
                     "salary": _salary(j.get("minSalary"), j.get("maxSalary"), j.get("currency")),
+                    "employment": j.get("employmentType"),
                     "url": j.get("guid") or j.get("applicationLink"),
                     "applyUrl": j.get("applicationLink") or j.get("guid"),
                     "posted": _epoch_date(j.get("pubDate")),
@@ -693,31 +750,6 @@ def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
             # Pages sometimes hold 19 of 20, so a short page doesn't mean the end.
             if not data.get("jobs") or page * 20 >= (data.get("totalCount") or 0):
                 break
-    return out
-
-
-def from_the_muse(cfg: dict) -> list[dict]:
-    """The Muse's public API. Its country filter doesn't narrow results, so it's queried by city."""
-    wait = paced(cfg.get("secondsBetweenCalls", 0.5))
-    params = [("category", c) for c in cfg.get("categories", ["Software Engineering"])]
-    params += [("location", loc) for loc in cfg.get("locations", [])]
-    out, page, pages = [], 0, 1
-    while page < min(pages, cfg.get("pages", 30)):
-        wait()
-        data = get_json("https://www.themuse.com/api/public/jobs?" + urllib.parse.urlencode([("page", page), *params]))
-        pages = data.get("page_count", 0)
-        page += 1
-        for j in data.get("results", []):
-            out.append({
-                "id": f"mu-{j['id']}",
-                "company": (j.get("company") or {}).get("name") or "Unknown",
-                "title": j.get("name", "").strip(),
-                "location": " | ".join(l["name"] for l in j.get("locations") or []),
-                "url": (j.get("refs") or {}).get("landing_page"),
-                "applyUrl": (j.get("refs") or {}).get("landing_page"),
-                "posted": iso_date(j.get("publication_date")),
-                "text": html_to_text(j.get("contents")),
-            })
     return out
 
 
@@ -731,6 +763,7 @@ def from_remotive() -> list[dict]:
         "location": f"Remote ({j.get('candidate_required_location') or 'Anywhere'})",
         "remote": True,
         "salary": j.get("salary") or None,
+        "employment": j.get("job_type"),
         "url": j.get("url"),
         "applyUrl": j.get("url"),
         "posted": iso_date(j.get("publication_date")),
@@ -778,6 +811,7 @@ def from_jobicy() -> list[dict]:
         "location": f"Remote ({j.get('jobGeo') or 'Anywhere'})",
         "remote": True,
         "salary": _salary(j.get("salaryMin"), j.get("salaryMax"), j.get("salaryCurrency")),
+        "employment": j.get("jobType"),
         "url": j.get("url"),
         "applyUrl": j.get("url"),  # Jobicy's terms: apply buttons go to the feed's job URL
         "posted": iso_date(j.get("pubDate")),
@@ -829,6 +863,7 @@ def finalize(raw: list[dict], source: str, keywords: dict[str, re.Pattern], inde
         loc = describe_location(index, j.get("location", ""), j.pop("remote", False), j.pop("hybrid", False))
         loc["hybrid"] = loc["hybrid"] or bool(HYBRID_TEXT.search(text))
         lat, lng = j.pop("lat", None), j.pop("lng", None)
+        kind = employment_type(j.pop("employment", None), j["title"], text)
         if not loc["regionIds"] and lat is not None:
             rid = nearest_metro(index, lat, lng)
             if rid:
@@ -840,9 +875,9 @@ def finalize(raw: list[dict], source: str, keywords: dict[str, re.Pattern], inde
             j["salary"] = salary_from_text(text)
         job = {"id": j["id"], "source": source, "location": "",
                **{k: v for k, v in j.items() if k != "id" and v not in (None, "")},
-               **loc, **hit, "level": classify_level(j["title"]), "years": required_years(text)}
+               **loc, **hit, "level": classify_level(j["title"]), "years": required_years(text), "type": kind}
         # Omit false and unknown values; with ~10k postings they add up, and the site treats missing as false.
-        for key in ("us", "remote", "hybrid", "years"):
+        for key in ("us", "remote", "hybrid", "years", "type"):
             if not job[key] and job[key] != 0:
                 del job[key]
         jobs.append(job)
@@ -924,7 +959,7 @@ def write_atomic(path: Path, data) -> None:
 
 
 SOURCE_LABELS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
-                 "himalayas": "Himalayas", "muse": "The Muse", "remotive": "Remotive",
+                 "himalayas": "Himalayas", "remotive": "Remotive",
                  "remoteok": "Remote OK", "jobicy": "Jobicy",
                  "hn": "Hacker News", "adzuna": "Adzuna", "usajobs": "USAJobs"}
 BOARD_FETCHERS = {"greenhouse": from_greenhouse, "lever": from_lever, "ashby": from_ashby}
@@ -961,13 +996,11 @@ def main() -> int:
             log(f"  Hacker News: could not list threads ({type(e).__name__}: {e})")
     if cfg.get("himalayas"):
         tasks.append(("himalayas", "Himalayas", lambda: from_himalayas(queries, cfg["himalayas"])))
-    if cfg.get("theMuse"):
-        tasks.append(("muse", "The Muse", lambda: from_the_muse(cfg["theMuse"])))
     for key, source, fn in (("remotive", "remotive", from_remotive), ("remoteOk", "remoteok", from_remote_ok),
                             ("jobicy", "jobicy", from_jobicy)):
         if cfg.get(key):
             tasks.append((source, SOURCE_LABELS[source], fn))
-    if cfg.get("adzuna") is not None:
+    if cfg.get("adzuna") is not None and cfg["adzuna"].get("enabled", True):  # off by default: paid API
         tasks.append(("adzuna", "Adzuna", lambda: from_adzuna(queries, cfg["adzuna"])))
     if cfg.get("usajobs", True):
         tasks.append(("usajobs", "USAJobs", lambda: from_usajobs(queries)))

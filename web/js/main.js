@@ -9,7 +9,7 @@ import { hasWebGL } from './util.js';
 import { escapeHtml, fmtInt, fmtLQ, shortMetro } from './format.js';
 import {
   filterJobs, langsByGroup, jobMarkers, strengthTags, jobSnippet, sortJobs, langCounts, textShard, postedLabel, safeUrl,
-  postingForPrep, LEVELS, LEVEL_LABEL, YEARS_OPTIONS, levelCounts, stateCounts, US_STATES, workCounts, isNew, SORTS,
+  postingForPrep, LEVELS, LEVEL_LABEL, YEARS_OPTIONS, levelCounts, stateCounts, US_STATES, workCounts, jobTypeCounts, JOB_TYPE_LABEL, isNew, SORTS,
 } from './jobs.js';
 import {
   loadEntries, saveEntries, loadKit, saveKit, loadPrefs, savePrefs, setStatus, followedUp, followUpDue, counts,
@@ -388,13 +388,13 @@ function setDrawer(open) {
 }
 
 const FILTER_DEFAULTS = {
-  q: '', where: 'all', work: 'any', usState: null, metro: null, fresh: false, focus: false, pay: false,
+  q: '', where: 'all', work: 'any', jobType: 'any', usState: null, metro: null, fresh: false, focus: false, pay: false,
   langs: [], levels: [], maxYears: null, yearsKnown: false,
 };
 
 function activeFilterCount() {
   return state.langs.length + state.levels.length
-    + [state.q, state.where !== 'all', state.work !== 'any', state.usState, state.metro, state.fresh, state.focus,
+    + [state.q, state.where !== 'all', state.work !== 'any', state.jobType !== 'any', state.usState, state.metro, state.fresh, state.focus,
       state.pay, state.maxYears != null, state.yearsKnown].filter(Boolean).length;
 }
 
@@ -515,6 +515,7 @@ async function refreshJobs(token) {
   renderPlacePickers(filterJobs(jobPool, { ...jobFilters(), usState: null }));
   renderLangPills();
   renderWorkStyles();
+  renderJobTypes();
   jobsListed = mine
     ? mine.map(([id, e]) => jobsById.get(id) ?? { id, ...e.job, gone: true })
       .filter((j) => !state.metro || j.regionIds?.includes(state.metro))
@@ -529,7 +530,7 @@ async function refreshJobs(token) {
 
 const jobFilters = () => ({
   q: state.q, where: state.where, focus: state.focus, usState: state.usState, langs: state.langs, groupOf,
-  work: state.work, fresh: state.fresh, meta: jobsData, pay: state.pay,
+  work: state.work, jobType: state.jobType, fresh: state.fresh, meta: jobsData, pay: state.pay,
   levels: state.levels, maxYears: state.maxYears, yearsKnown: state.yearsKnown,
 });
 
@@ -575,6 +576,11 @@ function renderLangPills() {
 function renderWorkStyles() {
   $('#job-work').innerHTML = workCounts(jobPool, jobFilters()).map(([key, label, n]) => `<label>
     <input type="radio" name="work" value="${key}"${state.work === key ? ' checked' : ''}><span>${label}<span class="seg-count">${fmtInt(n)}</span></span></label>`).join('');
+}
+
+function renderJobTypes() {
+  $('#job-type').innerHTML = jobTypeCounts(jobPool, jobFilters()).map(([key, label, n]) => `<label>
+    <input type="radio" name="jobtype" value="${key}"${state.jobType === key ? ' checked' : ''}><span>${label}<span class="seg-count">${fmtInt(n)}</span></span></label>`).join('');
 }
 
 function renderLevelPills(pool) {
@@ -667,7 +673,8 @@ function jobCard(j) {
   const url = safeUrl(j.url);
   const apply = safeUrl(j.applyUrl) ?? url;
   const remoteTag = (j.remote && !/remote/i.test(j.location) ? '<span class="tag">Remote</span>' : '')
-    + (j.hybrid && !/hybrid/i.test(j.location) ? '<span class="tag">Hybrid</span>' : '');
+    + (j.hybrid && !/hybrid/i.test(j.location) ? '<span class="tag">Hybrid</span>' : '')
+    + (JOB_TYPE_LABEL[j.type] ? `<span class="tag">${JOB_TYPE_LABEL[j.type]}</span>` : '');
   const newTag = isNew(j, jobsData) ? '<span class="tag is-new">New</span>' : '';
   const meta = [
     `<span class="job-company">${escapeHtml(j.company)}</span>`,
@@ -773,6 +780,12 @@ function wireJobs() {
   $('#job-work').addEventListener('change', (e) => {
     if (e.target.name !== 'work') return;
     state.work = e.target.value;
+    jobsShown = JOBS_PAGE;
+    refresh();
+  });
+  $('#job-type').addEventListener('change', (e) => {
+    if (e.target.name !== 'jobtype') return;
+    state.jobType = e.target.value;
     jobsShown = JOBS_PAGE;
     refresh();
   });

@@ -99,12 +99,12 @@ test('search finds occupations by programming language', () => {
 
 test('URL state round-trips and rejects junk', () => {
   const s = { occ: ['15-1252', '17-2171'], metric: 'employment', floor: 100, metro: '26420',
-    mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false };
+    mode: 'occ', q: '', where: 'all', work: 'any', jobType: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false };
   assert.deepEqual(readState(stateToSearch(s)), s);
-  const jobs = { ...s, mode: 'jobs', q: 'backend', where: 'us', work: 'hybrid', fresh: true, focus: true, levels: ['entry', 'mid'], maxYears: 3, yearsKnown: true, usState: 'WA', langs: ['C++', 'Go', 'C#'], mine: 'applied', sort: 'new', pay: true };
+  const jobs = { ...s, mode: 'jobs', q: 'backend', where: 'us', work: 'hybrid', jobType: 'contract', fresh: true, focus: true, levels: ['entry', 'mid'], maxYears: 3, yearsKnown: true, usState: 'WA', langs: ['C++', 'Go', 'C#', 'XR / AR / VR'], mine: 'applied', sort: 'new', pay: true };
   assert.deepEqual(readState(stateToSearch(jobs)), jobs);
   assert.deepEqual(readState('?occ=bad,15-1252&metric=x&floor=-3&metro=abc&mode=x&where=moon'),
-    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null, mode: 'occ', q: '', where: 'all', work: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false });
+    { occ: ['15-1252'], metric: 'lq', floor: 50, metro: null, mode: 'occ', q: '', where: 'all', work: 'any', jobType: 'any', fresh: false, focus: false, levels: [], maxYears: null, yearsKnown: false, usState: null, langs: [], mine: null, sort: 'relevance', pay: false });
   assert.equal(readState('?where=remote').work, 'remote'); // links from before the work-style filter
   assert.deepEqual(readState('?lvl=senior,bogus&yrs=abc').levels, ['senior']);
   assert.equal(readState('?st=wa').usState, null);
@@ -120,7 +120,7 @@ test('LQ color scale uses a fixed log domain', () => {
 
 import {
   filterJobs, langsByGroup, jobMarkers, isFocused, strengthTags, jobSnippet, sortJobs, langCounts, textShard,
-  postingForPrep, safeUrl, levelCounts, stateCounts, workCounts, isNew,
+  postingForPrep, safeUrl, levelCounts, stateCounts, workCounts, jobTypeCounts, isNew,
 } from '../../web/js/jobs.js';
 
 const JOBS = [
@@ -166,6 +166,11 @@ test('work style and new postings', () => {
   assert.deepEqual(ids({ work: 'hybrid' }), ['h', 'rh']);
   assert.deepEqual(ids({ work: 'onsite' }), ['o']); // no location means unknown, not on-site
   assert.deepEqual(workCounts(jobs).map(([k, , n]) => [k, n]), [['any', 5], ['remote', 2], ['hybrid', 2], ['onsite', 1]]);
+  const typed = [{ id: 'f' }, { id: 'c', type: 'contract' }, { id: 'p', type: 'parttime' }]
+    .map((j) => ({ title: '', company: '', location: '', regionIds: [], keywords: [], inTitle: [], mentions: {}, ...j }));
+  assert.deepEqual(filterJobs(typed, { jobType: 'contract' }).map((j) => j.id), ['c']);
+  assert.deepEqual(filterJobs(typed, { jobType: 'fulltime' }).map((j) => j.id), ['f']); // not stated counts as full-time
+  assert.deepEqual(jobTypeCounts(typed).map(([k, , n]) => [k, n]), [['any', 3], ['fulltime', 1], ['contract', 1], ['parttime', 1]]);
   const meta = { generated: '2026-10-19T12:00:00+00:00', trackedSince: '2026-09-30' };
   assert.deepEqual(ids({ fresh: true, meta }), ['r', 'rh']); // h is 18 days old; o and x were in the first run
   assert.equal(isNew(jobs[0], { ...meta, trackedSince: '2026-10-19' }), false);

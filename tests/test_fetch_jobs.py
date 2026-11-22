@@ -51,6 +51,26 @@ class Keywords(unittest.TestCase):
         self.assertEqual(hit["inTitle"], ["Rust", "C++"])
         self.assertEqual(hit["mentions"], {"Rust": 1, "C++": 1})
 
+    def test_xr_keywords(self):
+        for text in ["Senior XR Engineer", "AR/VR platform", "We build AR glasses", "virtual reality training",
+                     "Mixed Reality apps for Quest 3", "spatial computing on Apple Vision Pro"]:
+            self.assertTrue(mentions("XR / AR / VR", text), text)
+        for text in ["Little Rock, AR 72201", "Grow ARR", "XRP trading desk", "Mr. Smith", "MRR growth"]:
+            self.assertFalse(mentions("XR / AR / VR", text), text)
+        groups = [{"id": "language"}, {"id": "xr", "minMentions": 2}]
+        specs = [SPECS["Rust"], SPECS["XR / AR / VR"]]
+        rules, rx = fj.TitleRules(specs, groups), {"Rust": RX["Rust"], "XR / AR / VR": RX["XR / AR / VR"]}
+        boilerplate = "Our engine powers PC, console and VR games."
+        self.assertIsNone(fj.match_keywords("Counsel", boilerplate, rx, roles=rules))
+        self.assertEqual(fj.match_keywords("Engineer", boilerplate + " Rust.", rx, roles=rules)["keywords"], ["Rust"])
+        self.assertIn("XR / AR / VR", fj.match_keywords("VR Engineer", "", rx, roles=rules)["keywords"])
+        self.assertIn("XR / AR / VR", fj.match_keywords("Engineer", "AR glasses. Virtual reality.", rx, roles=rules)["keywords"])
+        self.assertTrue(mentions("Unity", "Experience with Unity and C#"))
+        self.assertFalse(mentions("Unity", "Unity of purpose and community"))
+        self.assertFalse(mentions("Unity", "Delta Lake and Unity Catalog"))
+        self.assertTrue(mentions("Unreal Engine", "Gameplay programming in UE5"))
+        self.assertTrue(mentions("OpenXR / WebXR", "Ship on OpenXR and ARKit"))
+
     def test_frameworks_tag_but_never_qualify_alone(self):
         rx = {"Java": RX["Java"], "Spring Boot": RX["Spring Boot"], "AWS": RX["AWS"]}
         tags = frozenset({"Spring Boot", "AWS"})
@@ -120,6 +140,24 @@ class Experience(unittest.TestCase):
         }
         for title, level in cases.items():
             self.assertEqual(fj.classify_level(title), level, title)
+
+    def test_employment_type(self):
+        titles = {"Unity Developer (Contract)": "contract", "Backend Engineer - Contractor": "contract",
+                  "Senior Engineer, Contract": "contract", "XR Engineer | 6-month contract": "contract",
+                  "Freelance 3D Artist": "contract", "Part-Time Tutor": "parttime",
+                  "Smart Contract Engineer": None, "Contracts Manager": None, "Contract Specialist": None,
+                  "Senior Software Engineer": None}
+        for title, kind in titles.items():
+            self.assertEqual(fj.employment_type(None, title), kind, title)
+        self.assertEqual(fj.employment_type(None, "Engineer", "This is a 6-month contract role in NYC."), "contract")
+        self.assertIsNone(fj.employment_type(None, "Engineer", "We work with contractors and employees alike."))
+        # Board fields in each source's spelling; a title saying "Contract" beats a default "Full-time".
+        self.assertEqual(fj.employment_type("Contract - 6 months", "Engineer"), "contract")  # Lever
+        self.assertEqual(fj.employment_type("PartTime", "Engineer"), "parttime")  # Ashby
+        self.assertEqual(fj.employment_type(["permanent", "part_time"], "Engineer"), "parttime")  # Adzuna
+        self.assertEqual(fj.employment_type("Contractor", "Engineer"), "contract")  # Himalayas
+        self.assertEqual(fj.employment_type(["Full-Time"], "Engineer (Contract)"), "contract")
+        self.assertIsNone(fj.employment_type("Full-Time", "Engineer", "This is a contract role."))
 
     def test_years_required(self):
         cases = {

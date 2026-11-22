@@ -34,12 +34,11 @@ also used by the site for highlighting, so they must be valid in both Python and
 
 | Source | How | Key |
 | --- | --- | --- |
-| Greenhouse, Lever, Ashby | Public job-board APIs of each company in `sources.json` (about 280) | None |
+| Greenhouse, Lever, Ashby | Public job-board APIs of each company in `sources.json` (about 380, including XR / spatial-computing companies such as VRChat, Niantic Spatial, Distance Technologies and World Labs) | None |
 | Hacker News | The last 3 monthly "Ask HN: Who is hiring?" threads, via the Algolia HN API | None |
 | Himalayas | Keyword search of remote jobs open to US residents, up to 200 per language | None |
-| The Muse | Software Engineering and Data Science jobs in about 30 US tech cities | None |
 | Remotive, Remote OK, Jobicy | Remote developer job feeds (their terms: name them and link to their listing; the site does) | None |
-| Adzuna | Keyword search across US job sites, 5 pages of 50 per language, spaced 2.5 s apart | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` (developer.adzuna.com: the free key is for evaluation and its limits are lower than a twice-daily run uses; ongoing use needs a paid plan) |
+| Adzuna | Keyword search across US job sites, 5 pages of 50 per language, spaced 2.5 s apart | Off by default: Adzuna's API is paid (the free key is only for evaluation). To use it, set `"enabled": true` under `adzuna` in `jobs/sources.json` and add `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
 | USAJobs | Keyword search, federal jobs | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` (free at developer.usajobs.gov) |
 
 Sources without keys are skipped and listed as skipped in the sidebar. A failing board is reported
@@ -73,12 +72,21 @@ How postings are matched and placed:
   phrases like "hybrid role" and "3 days a week in the office" ("hybrid cloud" doesn't count).
   **On-site** means a posting names a place and mentions neither remote nor hybrid work, so some
   of those are hybrid in practice.
+- XR / AR / VR: its own filter row. A posting counts if the title says XR, AR/VR, VR, augmented,
+  virtual or mixed reality, spatial computing, AR glasses and the like, or the text says so at least
+  twice (`"minMentions": 2` on the group), so a game company's "PC, console and VR" boilerplate
+  doesn't tag every posting. Unity, Unreal Engine and OpenXR / WebXR (with ARKit, ARCore, visionOS)
+  are tags in the Frameworks row.
+- Job type: **Contract** or **Part-time** comes from the board's employment-type field (Lever,
+  Ashby, Himalayas, Remotive, Jobicy, Adzuna), a title like "Unity Developer (Contract)", or a plain
+  statement in the text ("This is a 6-month contract role"). "Smart Contract Engineer" and
+  "Contracts Manager" don't count. Everything else is **Full-time**, including postings that don't say.
 
 ### Keeping postings current
 
 Every run rebuilds the list from scratch, so closed roles drop out:
 
-- Company boards (Greenhouse, Lever, Ashby), The Muse, Himalayas and the remote feeds list only open
+- Company boards (Greenhouse, Lever, Ashby), Himalayas and the remote feeds list only open
   roles; when a role is filled it leaves their API and the next run removes it. Himalayas postings
   past their listed expiry date are skipped, and so are USAJobs postings whose applications closed.
 - Hacker News and Adzuna don't say when a role closes, so their postings expire after

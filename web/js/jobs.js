@@ -13,6 +13,16 @@ export function workMatches(job, work) {
   return true;
 }
 
+// Employment type, from the board's own field, the title ("(Contract)") or a plain statement in
+// the posting. Postings that don't say count as full-time.
+export const JOB_TYPES = [['any', 'Any'], ['fulltime', 'Full-time'], ['contract', 'Contract'], ['parttime', 'Part-time']];
+export const JOB_TYPE_LABEL = { contract: 'Contract', parttime: 'Part-time' };
+export function jobTypeMatches(job, jobType) {
+  if (jobType === 'fulltime') return !job.type;
+  if (jobType === 'contract' || jobType === 'parttime') return job.type === jobType;
+  return true;
+}
+
 const DAY = 86_400_000;
 /** First seen within `days` of the data's last update, and after tracking began (so not just "first run"). */
 export function isNew(job, { generated, trackedSince } = {}, days = 7) {
@@ -68,7 +78,7 @@ export function langsByGroup(langs, groupOf = {}) {
  */
 export function filterJobs(jobs, {
   q = '', where = 'all', focus = false, metro = null, levels = [], maxYears = null, yearsKnown = false,
-  usState = null, langs = [], groupOf = {}, work = 'any', fresh = false, meta = {}, pay = false,
+  usState = null, langs = [], groupOf = {}, work = 'any', fresh = false, meta = {}, pay = false, jobType = 'any',
 } = {}) {
   const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const rows = langsByGroup(langs, groupOf);
@@ -79,6 +89,7 @@ export function filterJobs(jobs, {
     if (maxYears != null && j.years != null && j.years > maxYears) return false;
     if (where === 'us' && !(j.us || j.regionIds.length)) return false;
     if (!workMatches(j, work)) return false;
+    if (!jobTypeMatches(j, jobType)) return false;
     if (fresh && !isNew(j, meta)) return false;
     if (pay && !j.salary) return false;
     if (focus && !isFocused(j, langs)) return false;
@@ -121,6 +132,11 @@ export function stateCounts(jobs) {
   const counts = new Map();
   for (const j of jobs) for (const st of j.states ?? []) counts.set(st, (counts.get(st) ?? 0) + 1);
   return [...counts].map(([st, n]) => [st, US_STATES[st] ?? st, n]).sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+/** [key, label, count] per employment type under `filters`. */
+export function jobTypeCounts(jobs, filters = {}) {
+  return JOB_TYPES.map(([key, label]) => [key, label, filterJobs(jobs, { ...filters, jobType: key }).length]);
 }
 
 /** [key, label, count] per work arrangement under `filters`. */
