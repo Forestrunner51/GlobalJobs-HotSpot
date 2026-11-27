@@ -23,7 +23,7 @@ jobs:
   # failed with "No artifacts named github-pages were found" (the upload wasn't listed yet).
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60  # the first run after adding Workday companies reads them slowly (~35 min)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
