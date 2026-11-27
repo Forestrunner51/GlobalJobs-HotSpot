@@ -174,6 +174,40 @@ export function jobSnippet(job, langs = []) {
   return k ? { lang: k, text: job.snippets[k] } : null;
 }
 
+// Boards the browser extension fills in (extension/src/core/ats.ts).
+export const AUTOFILL_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workday']);
+export const SHORTLIST_SIZES = [10, 15, 20, 25];
+
+/**
+ * Today's shortlist: the best `size` postings to apply to, at most `perCompany` from one company
+ * (employers notice several applications at once, and the extension allows 3 per company a month).
+ * Points: resume fit (0-100, or 50 with no resume), up to 30 for being new (losing 2 a day), 15 if
+ * the extension can fill the form, 10 if it's about the picked keywords, 5 if it lists pay.
+ * `skip` holds ids already saved, applied to or hidden.
+ */
+export function shortlist(jobs, {
+  size = 15, perCompany = 1, matchOf = null, langs = [], skip = new Set(), today = new Date(),
+} = {}) {
+  const day = (iso) => (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? Math.max(0, (today - new Date(`${iso}T12:00:00Z`)) / DAY) : 30);
+  const score = (j) => {
+    const fit = matchOf?.(j)?.percent ?? 50;
+    return fit + Math.max(0, 30 - 2 * day(j.firstSeen ?? j.posted)) + (AUTOFILL_SOURCES.has(j.source) ? 15 : 0)
+      + (langs.length && isFocused(j, langs) ? 10 : 0) + (j.salary ? 5 : 0);
+  };
+  const ranked = jobs.filter((j) => !skip.has(j.id) && !j.gone).map((j) => [score(j), j.posted ?? '', j])
+    .sort((a, b) => b[0] - a[0] || newestFirst(a[1], b[1]));
+  const picked = [];
+  const perCo = new Map();
+  for (const [, , j] of ranked) {
+    const co = j.company.trim().toLowerCase();
+    if ((perCo.get(co) ?? 0) >= perCompany) continue;
+    perCo.set(co, (perCo.get(co) ?? 0) + 1);
+    picked.push(j);
+    if (picked.length >= size) break;
+  }
+  return picked;
+}
+
 export const SORTS = [['relevance', 'Most relevant'], ['new', 'Newest'], ['match', 'Best for my resume']];
 
 const newestFirst = (a, b) => (a < b ? 1 : a > b ? -1 : 0);

@@ -19,9 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  # Build and deploy are separate jobs: deploying right after the upload in the same job often
+  # failed with "No artifacts named github-pages were found" (the upload wasn't listed yet).
+  build:
     runs-on: ubuntu-latest
-    environment: github-pages
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,4 +53,20 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
-      - uses: actions/deploy-pages@v4
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url || steps.retry.outputs.page_url }}
+    steps:
+      - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      # If the artifact still isn't visible, give it a minute and try once more.
+      - if: steps.deploy.outcome == 'failure'
+        run: sleep 60
+      - id: retry
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4

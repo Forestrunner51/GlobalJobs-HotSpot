@@ -10,6 +10,7 @@ import { escapeHtml, fmtInt, fmtLQ, shortMetro } from './format.js';
 import {
   filterJobs, langsByGroup, jobMarkers, strengthTags, jobSnippet, sortJobs, langCounts, textShard, postedLabel, safeUrl,
   postingForPrep, LEVELS, LEVEL_LABEL, YEARS_OPTIONS, levelCounts, stateCounts, US_STATES, workCounts, jobTypeCounts, JOB_TYPE_LABEL, isNew, SORTS,
+  shortlist, SHORTLIST_SIZES,
 } from './jobs.js';
 import {
   loadEntries, saveEntries, loadKit, saveKit, loadPrefs, savePrefs, setStatus, followedUp, followUpDue, counts,
@@ -953,6 +954,24 @@ function syncFromExtension() {
 const queueable = () => entriesWith(entries, 'saved').map(([id]) => jobsById.get(id))
   .filter((j) => j && !inProgress.has(applicationKey(j.applyUrl ?? j.url)));
 
+function makeShortlist() {
+  if (!jobsData) return;
+  const size = prefs.shortlistSize ?? 15;
+  const picks = shortlist(filterJobs(jobPool, jobFilters()), {
+    size, matchOf: profile?.skills.length ? matchOf : null, langs: state.langs, skip: new Set(Object.keys(entries)),
+  });
+  if (!picks.length) {
+    mineMessage('Nothing new to add under these filters. Clear some filters, or check back after the next refresh.', 'warn');
+    return;
+  }
+  for (const j of picks) entries = setStatus(entries, j, 'saved');
+  state.mine = 'saved';
+  state.metro = null;
+  jobsShown = JOBS_PAGE;
+  persist();
+  mineMessage(`Saved ${picks.length} posting${picks.length === 1 ? '' : 's'} from ${picks.length === 1 ? 'one company' : `${new Set(picks.map((j) => j.company)).size} companies`}${profile?.skills.length ? ', best fit first' : '. Add your resume to rank them by fit'}.${hasExtension() ? ' Press Apply to saved with Autofill to open them.' : ''}`);
+}
+
 async function queueSaved() {
   const saved = queueable().slice(0, QUEUE_MAX);
   if (!saved.length) return;
@@ -969,6 +988,7 @@ function renderMine() {
   due.hidden = !c.due;
   due.textContent = `${c.due} follow-up${c.due === 1 ? '' : 's'} due`;
   $('#hide-done').checked = prefs.hideDone;
+  $('#shortlist-size').value = String(prefs.shortlistSize ?? 15);
   const ready = entriesWith(entries, 'saved').filter(([id]) => jobsById.has(id)).length;
   $('#batch-download').textContent = `Download saved for prep (${ready})`;
   $('#batch-download').disabled = !ready;
@@ -1325,6 +1345,9 @@ function wireApplying() {
   $('#kit-open').addEventListener('click', openBank);
   $('#batch-download').addEventListener('click', downloadBatch);
   $('#autofill-queue').addEventListener('click', queueSaved);
+  $('#shortlist-size').innerHTML = SHORTLIST_SIZES.map((n) => `<option value="${n}">${n}</option>`).join('');
+  $('#shortlist-size').addEventListener('change', (e) => { prefs.shortlistSize = Number(e.target.value); savePrefs(prefs); });
+  $('#shortlist-make').addEventListener('click', makeShortlist);
   $('#autofill-history').addEventListener('click', () => toExtension('open-applications'));
   window.addEventListener('message', (e) => {
     if (e.source !== window || e.origin !== location.origin || e.data?.source !== 'job-autofill') return;

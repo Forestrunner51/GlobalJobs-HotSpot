@@ -256,6 +256,29 @@ class RateLimit(unittest.TestCase):
         self.assertEqual(sorted(asked), sorted(q for _, q in words))
         self.assertNotEqual(asked, [q for _, q in words])  # 30! orders; the listed one won't come up
 
+    def test_himalayas_runs_last_runs_unfinished_searches_first(self):
+        import urllib.error
+        asked = []
+
+        def fake(url, headers=None, timeout=60, body=None):
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            asked.append(f"{q['q'][0]}|{q.get('employment_type', [''])[0]}")
+            if len(asked) > 2:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+            return {"totalCount": 0, "jobs": []}
+        real_get, real_wait, fj.get_json, fj.RATE_LIMIT_WAIT = fj.get_json, fj.RATE_LIMIT_WAIT, fake, 0
+        fj.CUT_SHORT.clear()
+        try:
+            fj.from_himalayas([("Rust", "rust"), ("Go", "golang")],
+                              {"pages": 1, "contractPages": 1, "secondsBetweenCalls": 0, "shuffle": True, "rateLimitWaits": 0},
+                              pending=["golang|Contractor", "rust|"])
+        finally:
+            fj.get_json, fj.RATE_LIMIT_WAIT = real_get, real_wait
+        self.assertEqual(asked[:2], ["golang|Contractor", "rust|"])  # last run's leftovers go first
+        self.assertEqual(len(fj.HIMALAYAS_PENDING), 2)  # the 429'd search and the one never asked
+        self.assertIn(asked[2], fj.HIMALAYAS_PENDING)
+        fj.CUT_SHORT.clear()
+
     def test_cut_short_source_keeps_last_runs_postings(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -284,6 +307,89 @@ class RateLimit(unittest.TestCase):
             self.assertEqual(sorted(j["id"] for j in data["jobs"]), ["hm-not-reached", "hm-seen-again"])
             self.assertEqual(data["changes"]["closed"], 0)
             self.assertIn("rate limited", data["sources"][0]["problems"][0])
+
+
+class SlowBoards(unittest.TestCase):
+    """Workday, SmartRecruiters and Workable, with the network faked."""
+
+    def setUp(self):
+        self.real_get, self.calls = fj.get_json, []
+        self.real_throttles = dict(fj.THROTTLES)
+        for k in fj.THROTTLES:
+            fj.THROTTLES[k] = fj.Throttle(0)
+
+    def tearDown(self):
+        fj.get_json = self.real_get
+        fj.THROTTLES.update(self.real_throttles)
+        fj.REUSE.update({"jobs": {}, "out": None})
+        fj._SHARD_CACHE.clear()
+
+    def test_workday_lists_then_opens_tech_titles_only(self):
+        def fake(url, headers=None, timeout=60, body=None):
+            self.calls.append(url)
+            if url.endswith("/jobs"):
+                return {"total": 2, "jobPostings": [] if body["offset"] else [
+                    {"title": "Senior XR Engineer", "externalPath": "/job/Seattle-WA/XR_R0001", "bulletFields": ["R0001"]},
+                    {"title": "Payroll Specialist", "externalPath": "/job/Austin-TX/Pay_R0002", "bulletFields": ["R0002"]}]}
+            return {"jobPostingInfo": {"title": "Senior XR Engineer", "jobDescription": "<p>Build VR in C++.</p>",
+                                       "location": "Seattle, WA", "startDate": "2026-11-20", "timeType": "Full time",
+                                       "remoteType": "Hybrid"}}
+        fj.get_json = fake
+        jobs = fj.from_workday({"name": "Acme", "url": "https://acme.wd5.myworkdayjobs.com/en-US/Careers"})
+        self.assertEqual(self.calls, ["https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/Careers/jobs",
+                                      "https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/Careers/job/Seattle-WA/XR_R0001"])
+        self.assertEqual(len(jobs), 1)
+        j = jobs[0]
+        self.assertEqual((j["id"], j["location"], j["posted"], j["hybrid"]), ("wd-acme-R0001", "Seattle, WA", "2026-11-20", True))
+        self.assertEqual(j["url"], "https://acme.wd5.myworkdayjobs.com/Careers/job/Seattle-WA/XR_R0001")
+        self.assertIn("Build VR", j["text"])
+
+    def test_workday_site_urls_and_reuse_of_last_runs_text(self):
+        import tempfile
+        def fake(url, headers=None, timeout=60, body=None):
+            self.calls.append(url)
+            return {"total": 1, "jobPostings": [] if body and body["offset"] else [
+                {"title": "AR Engineer", "externalPath": "/job/LA/AR_R0009", "bulletFields": ["R0009"]}]}
+        fj.get_json = fake
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "jobs-text").mkdir()
+            (out / "jobs-text" / f"{fj.text_shard('wd-snapchat-R0009')}.json").write_text(json.dumps({"wd-snapchat-R0009": "Spectacles AR"}))
+            fj.REUSE.update({"out": out, "jobs": {"wd-snapchat-R0009": {"company": "Snap", "title": "AR Engineer",
+                             "location": "Los Angeles, CA", "url": "https://x/9", "posted": "2026-11-01", "type": "contract"}}})
+            jobs = fj.from_workday({"name": "Snap", "url": "https://wd1.myworkdaysite.com/recruiting/snapchat/snap"})
+        self.assertEqual(self.calls, ["https://wd1.myworkdaysite.com/wday/cxs/snapchat/snap/jobs"])  # no detail request
+        self.assertEqual((jobs[0]["text"], jobs[0]["employment"], jobs[0]["posted"]), ("Spectacles AR", "Contract", "2026-11-01"))
+
+    def test_smartrecruiters(self):
+        def fake(url, headers=None, timeout=60, body=None):
+            self.calls.append(url)
+            if "offset=" in url:
+                return {"totalFound": 2, "content": [
+                    {"id": "11", "name": "Backend Engineer (Go)", "releasedDate": "2026-11-25T10:00:00Z",
+                     "location": {"city": "Austin", "region": "TEXAS", "country": "us", "hybrid": True},
+                     "typeOfEmployment": {"label": "Contract"}},
+                    {"id": "12", "name": "Store Associate", "location": {"city": "Austin", "country": "us"}}]}
+            return {"postingUrl": "https://jobs.smartrecruiters.com/Acme/11", "applyUrl": "https://jobs.smartrecruiters.com/Acme/11?oga=true",
+                    "jobAd": {"sections": {"jobDescription": {"text": "<p>Go services.</p>"}}}}
+        fj.get_json = fake
+        jobs = fj.from_smartrecruiters({"name": "Acme", "board": "Acme"})
+        self.assertEqual(len(self.calls), 2)  # the list, then the one tech title
+        j = jobs[0]
+        self.assertEqual((j["id"], j["location"], j["employment"], j["posted"]), ("sr-Acme-11", "Austin, TEXAS", "Contract", "2026-11-25"))
+        self.assertEqual(fj._sr_location({"city": "Montreal", "country": "ca", "fullLocation": "Montreal, , Canada"}), "Montreal, Canada")
+        for title in ["Talent Acquisition & Internal Mobility Manager", "Contest Coordinator"]:
+            self.assertIsNone(fj.TECH_TITLE.search(title), title)
+        self.assertEqual(fj.employment_type(j["employment"], j["title"]), "contract")
+        self.assertIn("Go services", j["text"])
+
+    def test_workable(self):
+        fj.get_json = lambda url, headers=None, timeout=60, body=None: {"jobs": [
+            {"title": "Unity Developer", "shortcode": "AB12", "employment_type": "Contract", "telecommuting": True,
+             "description": "<p>Unity and C#.</p>", "url": "https://apply.workable.com/acme/j/AB12/",
+             "published_on": "2026-11-24", "locations": [{"city": "Berlin", "country": "Germany"}]}]}
+        j = fj.from_workable({"name": "Acme", "board": "acme"})[0]
+        self.assertEqual((j["id"], j["location"], j["remote"], j["employment"]), ("wk-acme-AB12", "Berlin, Germany", True, "Contract"))
 
 
 class Pay(unittest.TestCase):

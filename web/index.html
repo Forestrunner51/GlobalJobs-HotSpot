@@ -61,6 +61,12 @@
           <h2>My applications</h2>
           <div id="mine-views" class="segmented four" role="radiogroup" aria-label="Which postings"></div>
           <button type="button" id="due-line" class="linklike due" hidden></button>
+          <div class="shortlist-row">
+            <button type="button" class="btn-primary small" id="shortlist-make">Build today's shortlist</button>
+            <label class="small muted" for="shortlist-size">of</label>
+            <select id="shortlist-size" aria-label="How many postings"></select>
+          </div>
+          <p class="hint">Picks the best postings under your current filters that you haven't saved, applied to or hidden: best fit for your resume, newest, forms the Autofill extension can fill, one per company. They're saved to your list, ready for <strong>Apply to saved with Autofill</strong>.</p>
           <label class="check"><input type="checkbox" id="hide-done"> Hide postings I applied to or hid</label>
           <div class="mine-actions">
             <button type="button" class="ghost small" id="kit-open">Answer bank</button>

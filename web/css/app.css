@@ -298,6 +298,8 @@ dialog p, dialog li { font-size: 0.92rem; }
 #my-apps .segmented { margin-top: 2px; }
 .due { display: block; margin-top: 8px; color: var(--warn); font-size: 0.85rem; }
 .mine-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.shortlist-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.shortlist-row select { width: auto; }
 .mine-more { margin-top: 8px; font-size: 0.85rem; }
 .mine-more summary { cursor: pointer; color: var(--muted); }
 .file-pick { cursor: pointer; }

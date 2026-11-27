@@ -5,7 +5,9 @@ Writes web/data/jobs.json (the list the site shows) and web/data/jobs-text/*.jso
 text in 32 pieces, loaded only when you open a posting or copy it for apply/jobprep.py).
 
 Sources, all used through their public APIs:
-  Greenhouse, Lever, Ashby   company job boards listed in sources.json (no key needed)
+  Greenhouse, Lever, Ashby,  company job boards listed in sources.json (no key needed). Workday,
+  Workday, SmartRecruiters,  SmartRecruiters and Workable list postings without their text, so
+  Workable                   only tech-looking titles are opened, paced, and reused across runs
   Hacker News                recent monthly "Ask HN: Who is hiring?" threads (no key needed)
   Himalayas                  job search API (no key needed). The Muse closed its public API in
                              November 2026, so it's no longer a source
@@ -32,6 +34,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -56,10 +59,13 @@ def log(msg: str) -> None:
 RETRY_DELAYS = (2, 6)  # seconds before the 2nd and 3rd attempts
 
 
-def get_json(url: str, headers: dict | None = None, timeout: int = 60):
-    """GET and parse JSON, retrying server errors and network failures. Client errors (404, 429)
-    are raised at once: retrying won't fix them, and 429 means slow down."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+def get_json(url: str, headers: dict | None = None, timeout: int = 60, body: dict | None = None):
+    """GET (or, with `body`, POST as JSON) and parse JSON, retrying server errors and network
+    failures. Client errors (404, 429) are raised at once: retrying won't fix them, and 429 means
+    slow down."""
+    extra = {"Content-Type": "application/json", "Accept": "application/json"} if body is not None else {}
+    req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"User-Agent": USER_AGENT, **extra, **(headers or {})})
     for delay in (*RETRY_DELAYS, None):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -532,6 +538,220 @@ def from_ashby(company: dict) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- Workday, SmartRecruiters, Workable
+#
+# These list postings without their text, so each posting's text is one more request. To keep
+# that down, only titles that look like tech roles are opened, a posting already read last run
+# reuses last run's text, and each API's requests go through one shared, paced queue (Workday and
+# Workable refuse a burst of requests from one address for several minutes).
+
+TECH_TITLE = re.compile(r"engineer|developer|programmer|software|scientist|architect|\bSRE\b|devops|devsecops|"
+                        r"reliability|platform|infrastructure|cloud|security|data|machine learning|\bML\b|\bAI\b|"
+                        r"technical|technologist|graphics|rendering|XR|\bVR\b|\bAR\b|reality|unity|unreal|"
+                        r"game(?:play)?|firmware|embedded|systems|computer vision|robotics|\bQA\b|\btest|\bSDET\b|"
+                        r"\bintern(?:ship)?\b|\bco-?op\b", re.I)
+
+
+class Throttle:
+    """At most one request per `seconds` across every thread that shares it."""
+
+    def __init__(self, seconds: float):
+        self.seconds, self.next, self.lock = seconds, 0.0, threading.Lock()
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            delay = self.next - now
+            self.next = max(now, self.next) + self.seconds
+        if delay > 0:
+            time.sleep(delay)
+
+
+THROTTLES = {"workday": Throttle(1.0), "smartrecruiters": Throttle(0.25), "workable": Throttle(2.0)}
+
+# Last run's postings and their text, so a posting already read isn't downloaded again. main()
+# fills this in; tests and single fetches leave it empty.
+REUSE: dict = {"jobs": {}, "out": None}
+_SHARD_CACHE: dict[str, dict] = {}
+_SHARD_LOCK = threading.Lock()
+
+
+def reuse(job_id: str) -> dict | None:
+    """Last run's posting as a raw record (text included), or None if it has to be fetched."""
+    prev = REUSE["jobs"].get(job_id)
+    if not prev or REUSE["out"] is None:
+        return None
+    shard = text_shard(job_id)
+    with _SHARD_LOCK:
+        if shard not in _SHARD_CACHE:
+            try:
+                _SHARD_CACHE[shard] = json.loads((REUSE["out"] / "jobs-text" / f"{shard}.json").read_text())
+            except (OSError, ValueError):
+                _SHARD_CACHE[shard] = {}
+        text = _SHARD_CACHE[shard].get(job_id)
+    if not text:
+        return None
+    return {"id": job_id, "company": prev["company"], "title": prev["title"], "location": prev.get("location", ""),
+            "remote": bool(prev.get("remote")), "hybrid": bool(prev.get("hybrid")), "salary": prev.get("salary"),
+            "employment": {"contract": "Contract", "parttime": "Part-time"}.get(prev.get("type"), "Full-time"),
+            "url": prev.get("url"), "applyUrl": prev.get("applyUrl") or prev.get("url"),
+            "posted": prev.get("posted"), "text": text}
+
+
+def throttled_json(api: str, url: str, body: dict | None = None):
+    """get_json through the API's shared throttle. One 429 waits RATE_LIMIT_WAIT and retries; a
+    second is raised, so main() keeps that company's postings from last run."""
+    for attempt in (1, 2):
+        THROTTLES[api].wait()
+        try:
+            return get_json(url, body=body, timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 2:
+                raise
+            log(f"  {SOURCE_LABELS[api]}: rate limited; waiting {RATE_LIMIT_WAIT}s")
+            time.sleep(RATE_LIMIT_WAIT)
+
+
+def from_workday(company: dict) -> list[dict]:
+    """A company's Workday careers site, e.g. "url": "https://unitytech.wd1.myworkdayjobs.com/Unity"
+    or "https://wd1.myworkdaysite.com/recruiting/snapchat/snap".
+    Optional: "search" (Workday's own keyword box, to narrow very large sites), "maxPages" (pages
+    of 20 to list, default 25) and "maxPostings" (new postings to open per run, default 120; ones
+    read on an earlier run don't count, so a large site fills in over a few runs)."""
+    parts = urllib.parse.urlsplit(company["url"])
+    path = [p for p in parts.path.split("/") if p and not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", p)]
+    if parts.netloc.endswith("myworkdaysite.com"):  # wd1.myworkdaysite.com/recruiting/<tenant>/<site>
+        tenant, site = path[1], path[2]
+        public = f"https://{parts.netloc}/recruiting/{tenant}/{site}"
+    else:  # <tenant>.wd5.myworkdayjobs.com/<site>
+        tenant, site = parts.netloc.split(".")[0], path[0]
+        public = f"https://{parts.netloc}/{site}"
+    api = f"https://{parts.netloc}/wday/cxs/{tenant}/{site}"
+    listed, offset, total = [], 0, None
+    while offset < company.get("maxPages", 25) * 20 and (total is None or offset < total):
+        data = throttled_json("workday", f"{api}/jobs", {"appliedFacets": {}, "limit": 20, "offset": offset,
+                                                         "searchText": company.get("search", "")})
+        if total is None:
+            total = data.get("total") or 0  # only the first page reports it
+        page = data.get("jobPostings") or []
+        if not page:
+            break
+        listed += page
+        offset += 20
+    out, opened = [], 0
+    for p in listed:
+        job_path = p.get("externalPath") or ""
+        if not job_path or not TECH_TITLE.search(p.get("title", "")):
+            continue
+        req = next((b for b in p.get("bulletFields") or [] if re.fullmatch(r"[A-Za-z0-9_-]{3,40}", b)), None)
+        job_id = f"wd-{tenant}-{req}" if req else _stable_id(f"wd-{tenant}", job_path)
+        old = reuse(job_id)
+        if old:
+            out.append(old)
+            continue
+        if opened >= company.get("maxPostings", 120):
+            continue
+        opened += 1
+        info = (throttled_json("workday", f"{api}{job_path}") or {}).get("jobPostingInfo") or {}
+        url = info.get("externalUrl") or f"{public}{job_path}"
+        places = [info.get("location") or p.get("locationsText") or "", *(info.get("additionalLocations") or [])]
+        remote_type = (info.get("remoteType") or "").lower()
+        out.append({
+            "id": job_id,
+            "company": company["name"],
+            "title": (info.get("title") or p.get("title", "")).strip(),
+            "location": " | ".join(dict.fromkeys(x for x in places if x)),
+            "remote": "remote" in remote_type,
+            "hybrid": "hybrid" in remote_type,
+            "employment": info.get("timeType"),
+            "url": url,
+            "applyUrl": url,
+            "posted": iso_date(info.get("startDate")),
+            "text": html_to_text(info.get("jobDescription")),
+        })
+    return out
+
+
+def _sr_location(loc: dict) -> str:
+    """"Austin, TEXAS" or "Frankfurt, Germany". The full country name, not SmartRecruiters' two-letter
+    code, which for Canada ("CA") would read as California."""
+    loc = loc or {}
+    full = [x.strip() for x in (loc.get("fullLocation") or "").split(",") if x.strip()]
+    if (loc.get("country") or "").lower() == "us":
+        place = ", ".join(x for x in [loc.get("city"), loc.get("region")] if x) or "United States"
+    else:
+        place = ", ".join(dict.fromkeys(x for x in [loc.get("city"), full[-1] if full else (loc.get("country") or "").upper()] if x))
+    return f"{place} (Remote)" if loc.get("remote") else place
+
+
+def from_smartrecruiters(company: dict) -> list[dict]:
+    """A company's SmartRecruiters board ("board" is the id in jobs.smartrecruiters.com/<board>)."""
+    base = f"https://api.smartrecruiters.com/v1/companies/{company['board']}/postings"
+    listed, offset, total = [], 0, None
+    while total is None or offset < min(total, company.get("maxList", 2000)):
+        data = throttled_json("smartrecruiters", f"{base}?limit=100&offset={offset}")
+        total = data.get("totalFound") or 0
+        page = data.get("content") or []
+        if not page:
+            break
+        listed += page
+        offset += 100
+    out, opened = [], 0
+    for p in listed:
+        if not TECH_TITLE.search(p.get("name", "")):
+            continue
+        job_id = f"sr-{company['board']}-{p['id']}"
+        old = reuse(job_id)
+        if old:
+            out.append(old)
+            continue
+        if opened >= company.get("maxPostings", 300):
+            continue
+        opened += 1
+        d = throttled_json("smartrecruiters", f"{base}/{p['id']}")
+        sections = ((d.get("jobAd") or {}).get("sections")) or {}
+        text = "\n\n".join(html_to_text((sections.get(k) or {}).get("text"))
+                            for k in ("jobDescription", "qualifications", "additionalInformation", "companyDescription"))
+        loc = p.get("location") or {}
+        out.append({
+            "id": job_id,
+            "company": company["name"],
+            "title": p.get("name", "").strip(),
+            "location": _sr_location(loc),
+            "remote": bool(loc.get("remote")),
+            "hybrid": bool(loc.get("hybrid")),
+            "employment": (p.get("typeOfEmployment") or {}).get("label"),
+            "url": d.get("postingUrl"),
+            "applyUrl": d.get("applyUrl") or d.get("postingUrl"),
+            "posted": iso_date(p.get("releasedDate")),
+            "text": text.strip(),
+        })
+    return out
+
+
+def from_workable(company: dict) -> list[dict]:
+    """A company's Workable board ("board" is the account in apply.workable.com/<board>). One request
+    returns every posting with its text."""
+    data = throttled_json("workable", f"https://apply.workable.com/api/v1/widget/accounts/{company['board']}?details=true")
+    out = []
+    for j in data.get("jobs", []):
+        locs = j.get("locations") or [{"city": j.get("city"), "region": j.get("state"), "country": j.get("country")}]
+        places = [", ".join(x for x in [l.get("city"), l.get("region") or l.get("country")] if x) for l in locs]
+        out.append({
+            "id": f"wk-{company['board']}-{j.get('shortcode') or _stable_id('', j.get('url', ''))}",
+            "company": company["name"],
+            "title": (j.get("title") or "").strip(),
+            "location": " | ".join(dict.fromkeys(p for p in places if p)),
+            "remote": bool(j.get("telecommuting")),
+            "employment": j.get("employment_type"),
+            "url": j.get("url") or j.get("shortlink"),
+            "applyUrl": j.get("application_url") or j.get("url"),
+            "posted": iso_date(j.get("published_on") or j.get("created_at")),
+            "text": html_to_text(j.get("description")),
+        })
+    return out
+
+
 ROLE_HINT = re.compile(r"engineer|developer|programmer|scientist|architect|researcher|designer|"
                        r"\bsre\b|devops|manager|lead|head of|staff|intern|consultant|analyst|cto|founding", re.I)
 LOC_HINT = re.compile(r"remote|onsite|on-site|hybrid|\b[A-Z]{2}\b|,|\b(US|USA|UK|EU|EMEA|APAC)\b")
@@ -686,44 +906,66 @@ def _salary(lo, hi, currency="USD") -> str | None:
     return f"{sym}{(lo or hi) // 1000}k" if (lo or hi) else None
 
 
-def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
+# Searches Himalayas didn't get to last run (it rate limits part-way through most runs), as
+# "query|employment type" keys. main() saves them in jobs.json and puts them first next run.
+HIMALAYAS_PENDING: list[str] = []
+
+
+def himalayas_searches(queries: list[tuple[str, str]], cfg: dict, pending: list[str] | None = None) -> list[tuple]:
+    """(word, query, employment type, pages) for every search, last run's unfinished ones first.
+    With "contractPages", each query is also searched among contract jobs only."""
+    searches = [(w, q, "", cfg.get("pagesPerKeyword", {}).get(w, cfg.get("pages", 10))) for w, q in queries]
+    if cfg.get("contractPages"):
+        searches += [(w, q, "Contractor", cfg["contractPages"]) for w, q in queries]
+    if cfg.get("shuffle"):
+        # In a fixed order the same last searches would never run; shuffled, each run covers a
+        # different part and main() keeps the rest from earlier runs.
+        searches = random.sample(searches, len(searches))
+    first = {k: i for i, k in enumerate(pending or [])}
+    return sorted(searches, key=lambda s: first.get(f"{s[1]}|{s[2]}", len(first)))  # stable: keeps the shuffle
+
+
+def from_himalayas(queries: list[tuple[str, str]], cfg: dict, pending: list[str] | None = None) -> list[dict]:
     """Keyword search over Himalayas' remote jobs, limited to roles open to US residents.
     `pages` (20 jobs each) caps every search; `pagesPerKeyword` raises it for languages that
-    Himalayas has many more of than the company boards do (C#/.NET)."""
+    Himalayas has many more of than the company boards do (C#/.NET). On a 429 it waits
+    RATE_LIMIT_WAIT seconds, up to `rateLimitWaits` times, then stops and records the searches it
+    didn't finish in HIMALAYAS_PENDING."""
     wait = paced(cfg.get("secondsBetweenCalls", 1.0))
+    searches = himalayas_searches(queries, cfg, pending)
+    HIMALAYAS_PENDING.clear()
     out = []
-    waited = False
-    if cfg.get("shuffle"):
-        # Himalayas refuses requests part-way through most runs. In a fixed order the same last
-        # searches would never run; shuffled, each run covers a different part and main() keeps
-        # the rest from earlier runs.
-        queries = random.sample(queries, len(queries))
-    for word, query in queries:
-        for page in range(1, cfg.get("pagesPerKeyword", {}).get(word, cfg.get("pages", 10)) + 1):
-            q = urllib.parse.urlencode({"q": query, "country": cfg.get("country", "US"), "page": page})
-            url = f"https://himalayas.app/jobs/api/search?{q}"
+    waits_left = cfg.get("rateLimitWaits", 1)
+
+    def stop(i, query, msg):
+        log(f"  Himalayas: {msg} at {query!r}; stopping with {len(out)} postings")
+        CUT_SHORT.add("himalayas")
+        HIMALAYAS_PENDING.extend(f"{q}|{t}" for _, q, t, _ in searches[i:])
+        return out
+
+    for i, (word, query, etype, pages) in enumerate(searches):
+        for page in range(1, pages + 1):
+            params = {"q": query, "country": cfg.get("country", "US"), "page": page}
+            if etype:
+                params["employment_type"] = etype
+            url = f"https://himalayas.app/jobs/api/search?{urllib.parse.urlencode(params)}"
             wait()
             try:
-                try:
-                    data = get_json(url)
-                except urllib.error.HTTPError as e:
-                    if e.code != 429:
-                        raise
-                    # Too many requests: every later search would fail too. Wait once; if it's
-                    # still refused, stop here and let main() keep last run's postings.
-                    if waited:
-                        log(f"  Himalayas: rate limited again at {query!r}; stopping with {len(out)} postings")
-                        CUT_SHORT.add("himalayas")
-                        return out
-                    waited = True
-                    log(f"  Himalayas: rate limited at {query!r}; waiting {RATE_LIMIT_WAIT}s")
-                    time.sleep(RATE_LIMIT_WAIT)
-                    data = get_json(url)
+                while True:
+                    try:
+                        data = get_json(url)
+                        break
+                    except urllib.error.HTTPError as e:
+                        # Too many requests: every later search would fail too. Wait and retry a
+                        # few times; then stop and let main() keep last run's postings.
+                        if e.code != 429 or waits_left <= 0:
+                            raise
+                        waits_left -= 1
+                        log(f"  Himalayas: rate limited at {query!r}; waiting {RATE_LIMIT_WAIT}s")
+                        time.sleep(RATE_LIMIT_WAIT)
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    log(f"  Himalayas: still rate limited at {query!r}; stopping with {len(out)} postings")
-                    CUT_SHORT.add("himalayas")
-                    return out
+                    return stop(i, query, "still rate limited")
                 log(f"  Himalayas: {query!r} page {page} failed ({e}); moving on")
                 break
             except Exception as e:  # noqa: BLE001 - keep the other searches' results
@@ -741,7 +983,7 @@ def from_himalayas(queries: list[tuple[str, str]], cfg: dict) -> list[dict]:
                     "location": f"Remote ({where})",
                     "remote": True,
                     "salary": _salary(j.get("minSalary"), j.get("maxSalary"), j.get("currency")),
-                    "employment": j.get("employmentType"),
+                    "employment": j.get("employmentType") or etype or None,
                     "url": j.get("guid") or j.get("applicationLink"),
                     "applyUrl": j.get("applicationLink") or j.get("guid"),
                     "posted": _epoch_date(j.get("pubDate")),
@@ -958,11 +1200,13 @@ def write_atomic(path: Path, data) -> None:
     tmp.replace(path)
 
 
-SOURCE_LABELS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
+SOURCE_LABELS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "workday": "Workday",
+                 "smartrecruiters": "SmartRecruiters", "workable": "Workable",
                  "himalayas": "Himalayas", "remotive": "Remotive",
                  "remoteok": "Remote OK", "jobicy": "Jobicy",
                  "hn": "Hacker News", "adzuna": "Adzuna", "usajobs": "USAJobs"}
-BOARD_FETCHERS = {"greenhouse": from_greenhouse, "lever": from_lever, "ashby": from_ashby}
+BOARD_FETCHERS = {"greenhouse": from_greenhouse, "lever": from_lever, "ashby": from_ashby, "workday": from_workday,
+                  "smartrecruiters": from_smartrecruiters, "workable": from_workable}
 
 
 def main() -> int:
@@ -981,6 +1225,11 @@ def main() -> int:
                          if any(g["id"] == k["group"] and g.get("tagOnly") for g in groups))
     roles = TitleRules(specs, groups)
     index = MetroIndex(json.loads(METROS.read_text()))
+    prev_jobs, prev_meta = load_previous(args.out)
+    REUSE["jobs"], REUSE["out"] = prev_jobs, args.out
+    for api in THROTTLES:  # e.g. "workday": {"secondsBetweenCalls": 2.5}
+        if isinstance(cfg.get(api), dict) and "secondsBetweenCalls" in cfg[api]:
+            THROTTLES[api] = Throttle(cfg[api]["secondsBetweenCalls"])
 
     # Every fetch is an independent (source, label, thunk); failures are reported, never fatal.
     # Search APIs are asked only for keywords that bring in postings; tags are matched on the text.
@@ -995,7 +1244,8 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001 - reported like any other failed source
             log(f"  Hacker News: could not list threads ({type(e).__name__}: {e})")
     if cfg.get("himalayas"):
-        tasks.append(("himalayas", "Himalayas", lambda: from_himalayas(queries, cfg["himalayas"])))
+        pending = (prev_meta.get("resume") or {}).get("himalayas")
+        tasks.append(("himalayas", "Himalayas", lambda: from_himalayas(queries, cfg["himalayas"], pending)))
     for key, source, fn in (("remotive", "remotive", from_remotive), ("remoteOk", "remoteok", from_remote_ok),
                             ("jobicy", "jobicy", from_jobicy)):
         if cfg.get(key):
@@ -1015,10 +1265,11 @@ def main() -> int:
             return source, label, None, f"{type(e).__name__}: {e}"
 
     log(f"Fetching {len(tasks)} sources for {', '.join(words)}...")
-    with ThreadPoolExecutor(12) as ex:
+    # Workday, SmartRecruiters and Workable fetches spend most of their time waiting on their shared
+    # throttle; give them their own threads so they don't hold up the other boards.
+    with ThreadPoolExecutor(12 + sum(t[0] in THROTTLES for t in tasks)) as ex:
         results = list(ex.map(run, tasks))
 
-    prev_jobs, prev_meta = load_previous(args.out)
     today = dt.datetime.now(dt.timezone.utc).date()
     all_jobs, all_text, sources = [], {}, {}
     carried = []
@@ -1086,6 +1337,10 @@ def main() -> int:
         "keywordGroups": groups,
         "textShards": TEXT_SHARDS,
         "sources": list(sources.values()),
+        # Searches a rate limit cut off, to run first next time. If Himalayas failed outright, last
+        # run's list still stands.
+        "resume": ({"himalayas": HIMALAYAS_PENDING} if HIMALAYAS_PENDING
+                   else {} if sources.get("himalayas", {}).get("boards") else prev_meta.get("resume") or {}),
         "jobs": all_jobs,
     })
     write_text_shards(args.out, all_text)

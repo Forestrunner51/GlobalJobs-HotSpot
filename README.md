@@ -34,16 +34,21 @@ also used by the site for highlighting, so they must be valid in both Python and
 
 | Source | How | Key |
 | --- | --- | --- |
-| Greenhouse, Lever, Ashby | Public job-board APIs of each company in `sources.json` (about 380, including XR / spatial-computing companies such as VRChat, Niantic Spatial, Distance Technologies and World Labs) | None |
+| Greenhouse, Lever, Ashby | Public job-board APIs of each company in `sources.json` (about 380, including XR / spatial-computing companies such as VRChat, Niantic Spatial, Distance Technologies, World Labs, Rivet and XYZ Reality) | None |
+| Workday, SmartRecruiters, Workable | Public career-site APIs of each company in `sources.json` (Unity, Snap and others on Workday; Ubisoft, ServiceNow and others on SmartRecruiters; Hugging Face and others on Workable). These list postings without their text, so only tech-looking titles are opened (up to `maxPostings` per company), a posting read on an earlier run reuses that run's text, and each API's requests are paced through one shared queue. Workday and Workable block a burst of requests from one address for several minutes | None |
 | Hacker News | The last 3 monthly "Ask HN: Who is hiring?" threads, via the Algolia HN API | None |
-| Himalayas | Keyword search of remote jobs open to US residents, up to 200 per language | None |
+| Himalayas | Keyword search of remote jobs open to US residents, up to 200 per language, plus up to 60 contract jobs per language (`contractPages`). It rate limits part-way through most runs: the fetcher waits up to 3 times, then saves the searches it didn't finish in `jobs.json` (`resume`) and runs those first next time, so every search gets covered within a few runs | None |
 | Remotive, Remote OK, Jobicy | Remote developer job feeds (their terms: name them and link to their listing; the site does) | None |
 | Adzuna | Keyword search across US job sites, 5 pages of 50 per language, spaced 2.5 s apart | Off by default: Adzuna's API is paid (the free key is only for evaluation). To use it, set `"enabled": true` under `adzuna` in `jobs/sources.json` and add `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
 | USAJobs | Keyword search, federal jobs | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` (free at developer.usajobs.gov) |
 
 Sources without keys are skipped and listed as skipped in the sidebar. A failing board is reported
 and the rest still load. To add a company, find its board name in its careers-page URL
-(`job-boards.greenhouse.io/<board>`, `jobs.lever.co/<board>`, `jobs.ashbyhq.com/<board>`).
+(`job-boards.greenhouse.io/<board>`, `jobs.lever.co/<board>`, `jobs.ashbyhq.com/<board>`,
+`jobs.smartrecruiters.com/<board>`, `apply.workable.com/<board>`). A Workday company takes the
+careers-site URL instead: `{"name": "Unity", "ats": "workday", "url": "https://unitytech.wd1.myworkdayjobs.com/Unity"}`
+(`wd1.myworkdaysite.com/recruiting/<tenant>/<site>` works too), optionally with `"search"` to narrow a
+very large site.
 
 How postings are matched and placed:
 
@@ -124,6 +129,11 @@ Nothing on the site or in `apply/` submits an application. The tools cut the tim
   The file is read in the browser. Only the names of the tracked skills it mentions and your contact
   details (name, email, phone, links, city) are kept, in localStorage; the text isn't stored.
   **Fill answer bank** drops those contact details into the bank's empty fields for you to check.
+- **Build today's shortlist** (My applications): saves the best 10–25 postings under your current
+  filters that aren't already saved, applied to or hidden, at most one per company. Ranked by resume
+  fit (if you added one), how new the posting is, whether the Autofill extension can fill its form
+  (Greenhouse, Lever, Ashby, Workday), whether it's about the keywords you picked, and whether it lists
+  pay. Then **Apply to saved with Autofill** opens them 10 at a time.
 - **☆ Save / Not interested / Mark applied** on each posting. Applying and hiding show an Undo. **My applications** shows Saved, Applied
   and Hidden lists; applied and hidden postings leave the main list. Follow-ups come due 6 days after
   applying. Saved postings that disappear from the data are shown as "no longer listed".

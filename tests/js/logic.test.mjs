@@ -120,7 +120,7 @@ test('LQ color scale uses a fixed log domain', () => {
 
 import {
   filterJobs, langsByGroup, jobMarkers, isFocused, strengthTags, jobSnippet, sortJobs, langCounts, textShard,
-  postingForPrep, safeUrl, levelCounts, stateCounts, workCounts, jobTypeCounts, isNew,
+  postingForPrep, safeUrl, levelCounts, stateCounts, workCounts, jobTypeCounts, isNew, shortlist,
 } from '../../web/js/jobs.js';
 
 const JOBS = [
@@ -151,6 +151,25 @@ test('filterJobs: location, focus, metro and text filters combine', () => {
   assert.deepEqual(ids({ usState: 'WA' }), ['a', 'b']);
   assert.deepEqual(ids({ usState: 'WA', work: 'remote' }), ['b']);
   assert.deepEqual(stateCounts(JOBS), [['NY', 'New York', 1], ['WA', 'Washington', 2]]);
+});
+
+test('shortlist: fit, freshness and autofill, one per company, skipping my list', () => {
+  const base = { title: '', location: '', regionIds: [], keywords: ['Go'], inTitle: [], mentions: { Go: 1 } };
+  const today = new Date('2026-11-26T12:00:00Z');
+  const jobs = [
+    { id: 'old', company: 'A', source: 'greenhouse', firstSeen: '2026-10-01' },
+    { id: 'new-gh', company: 'B', source: 'greenhouse', firstSeen: '2026-11-26' },
+    { id: 'new-feed', company: 'C', source: 'himalayas', firstSeen: '2026-11-26' },
+    { id: 'b-again', company: 'b ', source: 'lever', firstSeen: '2026-11-26' },
+    { id: 'saved', company: 'D', source: 'ashby', firstSeen: '2026-11-26' },
+    { id: 'gone', company: 'E', source: 'ashby', firstSeen: '2026-11-26', gone: true },
+  ].map((j) => ({ ...base, ...j }));
+  const ids = (opts) => shortlist(jobs, { today, skip: new Set(['saved']), ...opts }).map((j) => j.id);
+  assert.deepEqual(ids({}), ['new-gh', 'new-feed', 'old']); // b-again is B's second posting
+  assert.deepEqual(ids({ size: 2 }), ['new-gh', 'new-feed']);
+  assert.deepEqual(ids({ perCompany: 2 }).slice(0, 2).sort(), ['b-again', 'new-gh']);
+  const matchOf = (j) => ({ percent: j.id === 'old' ? 100 : 10 });
+  assert.equal(ids({ matchOf })[0], 'old'); // a strong fit beats freshness
 });
 
 test('work style and new postings', () => {
